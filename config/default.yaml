@@ -1,0 +1,78 @@
+# Corax Orchestrator - Default Configuration
+# This file contains the default configuration values.
+# Override by creating a local.yaml file in this directory.
+
+# General settings
+general:
+  app_name: "Corax Orchestrator"
+  version: "0.1.0"
+  debug: false
+  log_level: "INFO"
+
+# Platform settings
+platform:
+  auto_detect: true
+  preferred_shell: null # null = auto-detect
+
+# Installation settings
+installation:
+  download_dir: null # null = use system temp
+  install_dir: null # null = use platform default
+  verify_checksums: true
+  retry_on_failure: true
+  max_retries: 3
+  retry_delay_seconds: 5
+  timeout_seconds: 300
+
+# Permission settings
+permissions:
+  auto_accept: false
+  require_admin_for:
+    - docker
+    - system_packages
+
+# Model settings
+models:
+  default_quantization: "Q4_K_M"
+  download_timeout: 600
+  models_dir: null # null = use data/models
+
+# Persistence settings
+persistence:
+  enabled: true
+  format: "json" # json or msgpack
+  auto_save_interval: 30
+
+# Self-healing settings
+self_healing:
+  enabled: true
+  max_retries: 3
+  retry_delay: 5
+  health_check_interval: 60
+
+# Reporting settings
+reporting:
+  output_dir: null # null = use data/reports
+  formats:
+    - json
+    - markdown
+    - html
+
+# Logging settings
+logging:
+  level: "INFO"
+  file: null # null = use data/logs/corax.log
+  format: "structured" # structured or simple
+  max_size_mb: 10
+  backup_count: 5
+
+# Tool registry settings
+tools:
+  auto_register_builtins: true
+  custom_tools_dir: null # null = no custom tools
+
+# Network settings
+network:
+  connectivity_check_url: "https://google.com"
+  download_chunk_size: 8192
+  use_mirrors: false

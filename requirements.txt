@@ -1,0 +1,88 @@
+# Corax Orchestrator - Production Dependencies
+# Python 3.10+ required
+#
+# Usage:
+#   pip install -r requirements.txt          # Core dependencies
+#   pip install -r requirements.txt[all]     # All dependencies
+#   pip install -r requirements.txt[dev]     # Development dependencies
+#   pip install -r requirements.txt[windows] # Windows-specific
+#   pip install -r requirements.txt[models]  # Model management
+
+# =============================================================================
+# Core Dependencies (always required)
+# =============================================================================
+
+# Configuration
+pyyaml>=6.0.1
+
+# System & Platform
+psutil>=5.9.8
+platformdirs>=4.2.0
+
+# Async & Networking
+aiohttp>=3.9.3
+httpx>=0.27.0
+aiofiles>=23.2.1
+
+# Serialization
+orjson>=3.9.13
+msgpack>=1.0.8
+
+# Logging
+structlog>=24.1.0
+
+# CLI & UI
+rich>=13.7.1
+click>=8.1.7
+PySide6>=6.6.0
+
+# Validation & Data
+jsonschema>=4.21.1
+packaging>=24.0
+
+# Retry / Resilience
+tenacity>=8.2.3
+
+# Filesystem watching
+watchdog>=4.0.0
+
+
+# =============================================================================
+# Windows-specific (always required on Windows)
+# =============================================================================
+pywin32>=306
+wmi>=1.5.1
+
+
+# =============================================================================
+# Model Management
+# =============================================================================
+huggingface-hub>=0.22.0
+
+
+# =============================================================================
+# Linux distro detection
+# =============================================================================
+# distro>=1.9.0
+
+
+# =============================================================================
+# Development Dependencies
+# =============================================================================
+
+# Testing
+pytest>=8.0.2
+pytest-asyncio>=0.23.5
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
+
+# Code Quality
+mypy>=1.8.0
+ruff>=0.2.2
+
+# Documentation
+mkdocs>=1.5.3
+mkdocs-material>=9.5.11
+
+# Build
+pyinstaller>=6.6.0

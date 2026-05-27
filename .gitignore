@@ -1,0 +1,66 @@
+# Corax Orchestrator - .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Data directories (keep structure, ignore contents)
+data/persistence/*
+data/reports/*
+data/logs/*
+data/models/*
+!data/persistence/.gitkeep
+!data/reports/.gitkeep
+!data/logs/.gitkeep
+!data/models/.gitkeep
+
+# Config overrides
+config/local.yaml
+config/local.yml
+config/*.local.yaml
+config/*.local.yml
+
+# Logs
+*.log
+corax.log
+
+# Downloads
+downloads/
+
+# Environment
+.env
+.env.local
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+test-results/
+
+# Packaging
+*.whl
+*.tar.gz

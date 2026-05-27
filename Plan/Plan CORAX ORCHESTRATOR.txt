@@ -1,0 +1,551 @@
+Corax Orchestrator Convergence Phase Execution Plan
+CORAX ORCHESTRATOR
+Convergence + Hardening Execution Plan
+
+Reference project brief: fileciteturn0file0
+
+CURRENT STRATEGIC POSITION
+
+Corax is no longer in architecture phase.
+
+The platform is now entering the most dangerous stage of large-scale deployment systems:
+
+Runtime convergence + executable survivability.
+
+At this stage:
+
+architecture mistakes become expensive
+synchronization problems emerge
+packaging inconsistencies appear
+runtime observability gaps become critical
+GUI/runtime desynchronization causes operational instability
+deployment recovery logic becomes the differentiator between “demo” and “real platform”
+
+The next implementation batches must therefore optimize for:
+
+runtime coherence
+state persistence
+deployment survivability
+executable resilience
+autonomous continuation
+observability
+recoverability
+operator trust
+PRIMARY CONVERGENCE OBJECTIVE
+
+Reach:
+
+INTERNAL EXECUTABLE-CAPABLE ALPHA
+
+Meaning:
+
+Corax.exe launches reliably
+GUI initializes correctly
+deployment orchestration survives interruption
+recovery systems function after crashes/reboots
+deployment state persists correctly
+runtime telemetry remains accurate
+installer fallback systems recover autonomously
+packaging survives clean-machine execution
+AI stack deployment completes successfully
+CRITICAL EXECUTION ORDER
+
+The remaining work should NOT be approached randomly.
+
+The highest leverage implementation sequence is:
+
+Runtime State Bus
+GUI Runtime Wiring
+Deployment Persistence Layer
+Live Progress Synchronization
+ETA + Throughput Engine
+Recovery History System
+Executable Runtime Validation
+Portable Deployment Mode
+Offline Deployment Mode
+AI Model Orchestration Layer
+Production Hardening
+Real-machine survivability testing
+PHASE 1 — RUNTIME CONVERGENCE
+OBJECTIVE
+
+Eliminate all fragmentation between:
+
+deployment engine
+execution engine
+retry engine
+repair engine
+GUI layer
+reporting layer
+persistence layer
+
+Everything must consume ONE authoritative runtime state stream.
+
+REQUIRED CORE COMPONENT
+CoraxRuntimeStateBus
+
+This becomes the authoritative runtime synchronization backbone.
+
+Responsibilities:
+
+global runtime state propagation
+deployment event streaming
+GUI synchronization
+telemetry aggregation
+persistence snapshots
+retry/recovery notifications
+progress broadcasting
+throughput calculations
+ETA updates
+deployment health scoring
+RECOMMENDED ARCHITECTURE
+Deployment Engine
+        │
+        ▼
+Runtime State Bus
+        │
+ ┌──────┼────────┬─────────┬─────────┐
+ ▼      ▼        ▼         ▼         ▼
+GUI   Reports  Persistence Recovery Telemetry
+REQUIRED EVENT TYPES
+class RuntimeEventType(Enum):
+    DEPLOYMENT_STARTED
+    DEPLOYMENT_STOPPED
+    DEPLOYMENT_PAUSED
+    DEPLOYMENT_RESUMED
+
+
+    INSTALLATION_STARTED
+    INSTALLATION_PROGRESS
+    INSTALLATION_COMPLETED
+    INSTALLATION_FAILED
+
+
+    RETRY_SCHEDULED
+    RETRY_EXECUTED
+
+
+    REPAIR_STARTED
+    REPAIR_COMPLETED
+    REPAIR_FAILED
+
+
+    MODEL_DOWNLOAD_STARTED
+    MODEL_DOWNLOAD_PROGRESS
+    MODEL_DOWNLOAD_COMPLETED
+
+
+    EXECUTOR_HEALTH_CHANGED
+    RESOURCE_USAGE_UPDATED
+
+
+    RUNTIME_WARNING
+    RUNTIME_ERROR
+    RUNTIME_CRITICAL
+PHASE 2 — GUI ↔ RUNTIME SYNCHRONIZATION
+CURRENT RISK
+
+The biggest risk at this stage is GUI drift.
+
+Meaning:
+
+GUI shows stale state
+runtime progresses without GUI awareness
+deployment retries are invisible
+progress percentages become fake
+ETA becomes misleading
+operator loses trust
+REQUIRED DESIGN
+
+GUI must NEVER infer state.
+
+GUI becomes:
+
+A PURE STATE CONSUMER.
+
+All GUI panels subscribe to RuntimeStateBus.
+
+REQUIRED GUI PANELS
+Deployment Monitor
+
+Displays:
+
+current deployment stage
+active installers
+retry count
+current strategy
+fallback strategy
+failure count
+deployment throughput
+current bandwidth
+ETA remaining
+executor health
+disk consumption
+RAM pressure
+GPU utilization
+Recovery Monitor
+
+Displays:
+
+queued recoveries
+active repairs
+autonomous actions
+reboot continuation status
+failed recovery attempts
+rollback operations
+Model Orchestration Panel
+
+Displays:
+
+installed models
+cached models
+active downloads
+provider health
+inference validation state
+quantization metadata
+VRAM compatibility
+Packaging Diagnostics Panel
+
+Displays:
+
+PyInstaller state
+bundled dependency verification
+missing DLL detection
+antivirus quarantine detection
+startup timing
+cold boot timing
+portable mode validation
+PHASE 3 — DEPLOYMENT PERSISTENCE
+OBJECTIVE
+
+Corax must survive:
+
+crashes
+power loss
+Windows restart
+interrupted installers
+partial deployments
+corrupted checkpoints
+
+WITHOUT losing deployment continuity.
+
+REQUIRED COMPONENT
+CoraxDeploymentPersistenceEngine
+
+Responsibilities:
+
+deployment snapshots
+installer checkpoints
+rollback metadata
+deployment journal
+recovery serialization
+resume token generation
+deployment replay
+execution timelines
+REQUIRED STORAGE MODEL
+corax_runtime/
+    sessions/
+    deployments/
+    checkpoints/
+    recovery/
+    telemetry/
+    reports/
+    installers/
+    models/
+DEPLOYMENT JOURNAL FORMAT
+{
+  "deployment_id": "uuid",
+  "machine_id": "uuid",
+  "started_at": "timestamp",
+  "current_stage": "ollama_install",
+  "completed_steps": [],
+  "failed_steps": [],
+  "retry_history": [],
+  "repair_history": [],
+  "installer_state": {},
+  "system_state": {},
+  "recovery_tokens": []
+}
+PHASE 4 — LIVE PROGRESS + ETA ENGINE
+CRITICAL REQUIREMENT
+
+Do NOT use fake progress bars.
+
+Corax must estimate progress using:
+
+historical timings
+current throughput
+bandwidth
+installer characteristics
+extraction speed
+disk IO
+model size
+dependency graph depth
+REQUIRED COMPONENT
+CoraxProgressEstimator
+
+Inputs:
+
+deployment graph
+installer metadata
+current throughput
+retry probability
+historical runtime data
+active resource pressure
+
+Outputs:
+
+weighted progress percentage
+confidence score
+estimated remaining time
+bottleneck identification
+PHASE 5 — EXECUTABLE SURVIVABILITY
+OBJECTIVE
+
+Executable must survive:
+
+fresh Windows installs
+missing runtimes
+antivirus scrutiny
+SmartScreen friction
+path issues
+permission issues
+user profile differences
+offline execution
+REQUIRED VALIDATION MATRIX
+Runtime Validation
+
+Validate:
+
+startup
+dependency resolution
+embedded resources
+bundled DLLs
+subprocess spawning
+GUI startup
+privilege escalation
+reboot continuation
+portable mode
+REQUIRED TEST ENVIRONMENTS
+CLEAN MACHINE MATRIX
+Windows 10 Home
+Windows 10 Pro
+Windows 11 Home
+Windows 11 Pro
+low-RAM system
+HDD system
+integrated GPU system
+offline machine
+partially corrupted runtime
+PHASE 6 — PORTABLE DEPLOYMENT MODE
+OBJECTIVE
+
+Corax should support:
+
+USB execution
+portable runtime mode
+portable model cache
+portable reports
+portable deployment sessions
+
+WITHOUT registry dependence.
+
+REQUIRED COMPONENT
+PortableRuntimeResolver
+
+Responsibilities:
+
+relative path resolution
+portable cache discovery
+environment remapping
+runtime isolation
+dependency probing
+portable persistence handling
+PHASE 7 — OFFLINE DEPLOYMENT MODE
+OBJECTIVE
+
+Allow full deployment in restricted environments.
+
+REQUIRED FEATURES
+offline dependency cache
+offline wheel repository
+offline model bundles
+offline runtime packages
+integrity verification
+cache reconciliation
+REQUIRED COMPONENT
+CoraxOfflineRepository
+
+Supports:
+
+package indexing
+dependency resolution
+cache manifests
+integrity hashes
+mirror synchronization
+delta updates
+PHASE 8 — AI MODEL ORCHESTRATION
+CURRENT STATUS
+
+This subsystem is underdeveloped relative to the rest of Corax.
+
+This is now a strategic bottleneck.
+
+REQUIRED COMPONENT
+CoraxModelOrchestrator
+
+Responsibilities:
+
+provider abstraction
+model lifecycle
+model caching
+quantization management
+provider failover
+inference validation
+compatibility analysis
+model repair
+checksum validation
+VRAM-aware recommendations
+REQUIRED PROVIDERS
+
+Initial:
+
+Ollama
+HuggingFace
+llama.cpp
+LM Studio compatibility
+
+Future:
+
+vLLM
+OpenAI-compatible endpoints
+local inference clusters
+PHASE 9 — OBSERVABILITY
+OBJECTIVE
+
+Corax must explain:
+
+what it is doing
+why it is doing it
+what failed
+what it tried
+what it will try next
+what the operator should know
+REQUIRED COMPONENTS
+Telemetry Aggregator
+
+Collect:
+
+deployment metrics
+installer metrics
+retry metrics
+repair metrics
+runtime metrics
+model metrics
+packaging metrics
+Failure Intelligence Engine
+
+Classify:
+
+transient failures
+environmental failures
+dependency failures
+permission failures
+corruption failures
+networking failures
+provider failures
+
+And recommend:
+
+retry
+fallback installer
+rollback
+repair
+reboot continuation
+PHASE 10 — PRODUCTION HARDENING
+REQUIRED HARDENING TARGETS
+Security
+privilege boundaries
+signed binaries
+integrity verification
+safe subprocess execution
+command sanitization
+installer verification
+Reliability
+deadlock detection
+watchdog supervisors
+orphan process cleanup
+timeout recovery
+filesystem recovery
+cache repair
+Runtime Stability
+memory leak detection
+long-session survivability
+deployment replay stability
+crash-safe persistence
+Packaging Stability
+hidden imports validation
+DLL verification
+startup dependency scanning
+portable executable validation
+IMMEDIATE IMPLEMENTATION BATCH
+HIGHEST-LEVERAGE NEXT ACTIONS
+
+Implement THESE together as a convergence batch:
+
+CoraxRuntimeStateBus
+GUI subscription architecture
+deployment event streaming
+persistence snapshots
+live deployment telemetry
+progress estimator skeleton
+recovery history persistence
+runtime health monitor
+deployment journal replay
+ETA synchronization
+
+This single batch unlocks:
+
+real observability
+reliable GUI state
+autonomous continuation
+trustworthy progress reporting
+recovery transparency
+executable stability
+EXECUTION PRINCIPLE
+
+From this point onward:
+
+Corax should evolve like an operating system runtime.
+
+NOT like:
+
+a script collection
+a launcher
+an installer bundle
+a GUI wrapper
+
+The platform’s value now comes from:
+
+orchestration intelligence
+survivability
+autonomous recovery
+deployment continuity
+runtime observability
+execution resilience
+
+These are the systems that separate real infrastructure software from hobby tooling.
+
+CURRENT STRATEGIC PRIORITY
+
+The single most important engineering target right now is:
+
+STATE COHERENCE.
+
+Once the RuntimeStateBus + Persistence + GUI synchronization converge:
+
+the remainder of the alpha path accelerates dramatically.
+
+Without that convergence:
+
+the project risks fragmentation during the hardening phase.

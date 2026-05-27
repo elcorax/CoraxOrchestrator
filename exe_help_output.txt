@@ -1,0 +1,21 @@
+2026-05-27 18:41:50 [info     ] Corax Orchestrator initialized version=0.1.0
+[Corax] Startup validation warning: module 'platform' has no attribute 'platform'
+[Corax] Running in portable mode (root: D:\CORAX\CoraxOrchestrator\dist)
+2026-05-27 18:41:50 [info     ] Setting up portable environment is_executable=True is_usb=False root=D:\CORAX\CoraxOrchestrator\dist
+2026-05-27 18:41:50 [debug    ] Portable directory ensured     path=D:\CORAX\CoraxOrchestrator\dist\data
+2026-05-27 18:41:50 [debug    ] Portable directory ensured     path=D:\CORAX\CoraxOrchestrator\dist\data/cache
+2026-05-27 18:41:50 [debug    ] Portable directory ensured     path=D:\CORAX\CoraxOrchestrator\dist\data/installer_cache
+2026-05-27 18:41:50 [debug    ] Portable directory ensured     path=D:\CORAX\CoraxOrchestrator\dist\data/logs
+2026-05-27 18:41:50 [debug    ] Added to PATH                  path=D:\CORAX\CoraxOrchestrator\dist
+2026-05-27 18:41:50 [error    ] Portable environment setup failed error="module 'platform' has no attribute 'system'"
+2026-05-27 18:41:50 [debug    ] Subscriber attached: telemetry
+2026-05-27 18:41:50 [debug    ] Subscriber attached: persistence_journal
+2026-05-27 18:41:50 [debug    ] Subscriber attached: health_broadcaster
+2026-05-27 18:41:50 [warning  ] Runtime kernel initialization failed: module 'platform' has no attribute 'platform'
+2026-05-27 18:41:51 [info     ] Corax GUI initialized successfully
+2026-05-27 18:41:51 [info     ] RuntimeStateBus started
+2026-05-27 18:41:51 [info     ] RuntimeStateBus convergence started
+2026-05-27 18:41:51 [info     ] Bridge sync timer started at 5Hz
+2026-05-27 18:41:52 [info     ] Runtime bridge loop started
+2026-05-27 20:11:36 [info     ] Corax GUI exited with code 0
+2026-05-27 20:11:36 [info     ] Runtime bridge stopped

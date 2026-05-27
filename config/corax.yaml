@@ -1,0 +1,49 @@
+# Corax Orchestrator - Project Configuration
+project:
+  name: "Corax Orchestrator"
+  version: "0.1.0-alpha"
+  description: "AI infrastructure deployment and orchestration platform"
+
+logging:
+  level: "INFO"
+  directory: "data/logs"
+  json_output: false
+  max_bytes: 10485760
+  backup_count: 5
+
+platform:
+  preferred_shell: "auto"
+  use_powershell: true
+  admin_required: false
+
+tools:
+  install_dir: "%USERPROFILE%\\CoraxTools"
+  auto_accept: false
+  verify_checksums: true
+  timeout_seconds: 300
+  retry_attempts: 3
+
+models:
+  download_dir: "data/models"
+  max_concurrent_downloads: 2
+  default_quantization: "Q4_K_M"
+  hf_mirror: ""
+
+persistence:
+  directory: "data/persistence"
+  format: "json"
+  auto_save_interval: 30
+
+self_healing:
+  enabled: true
+  max_retries: 3
+  retry_delay_seconds: 5
+  health_check_interval: 60
+
+reporting:
+  output_dir: "data/reports"
+  formats:
+    - json
+    - html
+    - markdown
+  include_system_info: true
