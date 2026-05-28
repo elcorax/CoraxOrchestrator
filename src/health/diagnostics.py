@@ -406,6 +406,7 @@ class StartupDiagnostics:
 
     def save_report(self, filename: Optional[str] = None) -> str:
         """Save the diagnostic report to a file."""
+        filepath = ""
         try:
             if filename is None:
                 ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -424,14 +425,15 @@ class StartupDiagnostics:
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write(self._report.to_json())
 
-            # Also save markdown version
-            try:
-                md_filename = filename.replace(".json", ".md")
-                md_filepath = os.path.join(os.path.dirname(filepath), md_filename)
-                with open(md_filepath, "w", encoding="utf-8") as f:
-                    f.write(self._report.to_markdown())
-            except Exception:
-                pass
+            # Also save markdown version (guarded against empty filepath)
+            if filepath:
+                try:
+                    md_filename = filename.replace(".json", ".md")
+                    md_filepath = os.path.join(os.path.dirname(filepath), md_filename)
+                    with open(md_filepath, "w", encoding="utf-8") as f:
+                        f.write(self._report.to_markdown())
+                except Exception:
+                    pass
 
             return filepath
         except Exception:

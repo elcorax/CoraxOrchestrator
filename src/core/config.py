@@ -12,6 +12,7 @@ Provides hierarchical configuration management with:
 
 import os
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 from copy import deepcopy
@@ -22,6 +23,29 @@ from src.core.exceptions import ConfigurationError
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _is_frozen() -> bool:
+    """Detect if running as a PyInstaller executable."""
+    return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+
+
+def _get_bundle_root() -> Optional[str]:
+    """Get the PyInstaller bundle root if frozen."""
+    if _is_frozen():
+        return getattr(sys, "_MEIPASS", None)
+    return None
+
+
+def _resolve_config_dir(config_dir: Optional[Path]) -> Path:
+    """Resolve config directory with frozen-executable fallback."""
+    if config_dir is not None:
+        return config_dir
+    if _is_frozen():
+        bundle = _get_bundle_root()
+        if bundle:
+            return Path(os.path.join(os.path.dirname(bundle), "config"))
+    return Path("config")
 
 # Type for nested configuration dictionaries
 ConfigDict = Dict[str, Any]
@@ -186,7 +210,7 @@ class ConfigManager:
         config_dir: Optional[Path] = None,
         schema: Optional[ConfigSchema] = None,
     ) -> None:
-        self.config_dir = config_dir or Path("config")
+        self.config_dir = _resolve_config_dir(config_dir)
         self.schema = schema or DEFAULT_SCHEMA
         self._config: ConfigDict = {}
         self._loaded_files: List[Path] = []
@@ -385,7 +409,7 @@ def load_config(config_path: Optional[Path] = None) -> ConfigDict:
     if config_path:
         config_dir = config_path.parent if config_path.is_file() else config_path
     else:
-        config_dir = Path("config")
+        config_dir = _resolve_config_dir(None)
 
     manager = ConfigManager(config_dir=config_dir)
     return manager.load()

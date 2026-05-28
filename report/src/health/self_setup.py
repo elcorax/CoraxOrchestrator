@@ -1,0 +1,442 @@
+"""
+Corax Orchestrator - Self-Setup & Runtime Initialization.
+
+Provides automatic runtime setup including dependency installation,
+environment repair, PATH repair, runtime initialization, missing
+dependency recovery, and deployment startup verification.
+
+Ensures new machines can initialize correctly and broken environments
+can recover automatically.
+
+Survivability-hardened: bounded retries, missing-resource survivability,
+graceful degradation under frozen execution, safe startup logging.
+"""
+
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+def _is_frozen() -> bool:
+    """Detect if running as a PyInstaller executable."""
+    return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+
+
+def _safe_mkdir(path: Path) -> bool:
+    """Safely create a directory, return True on success."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+@dataclass
+class SetupResult:
+    """Result of the self-setup process."""
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    success: bool = False
+    steps_completed: List[str] = field(default_factory=list)
+    steps_failed: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    repairs_made: List[str] = field(default_factory=list)
+    environment_info: Dict[str, str] = field(default_factory=dict)
+    frozen_detected: bool = False
+
+    def to_dict(self) -> Dict:
+        try:
+            return {
+                "timestamp": self.timestamp,
+                "success": self.success,
+                "steps_completed": self.steps_completed,
+                "steps_failed": self.steps_failed,
+                "errors": self.errors,
+                "warnings": self.warnings,
+                "repairs_made": self.repairs_made,
+                "environment_info": self.environment_info,
+                "frozen_detected": self.frozen_detected,
+            }
+        except Exception:
+            return {"success": False, "error": "Failed to serialize setup result"}
+
+
+class SelfSetup:
+    """
+    Automatic runtime setup and environment repair system.
+
+    Handles dependency installation, PATH repair, runtime initialization,
+    and deployment startup verification. Designed to recover broken
+    environments and initialize new machines.
+
+    Survivability:
+    - Bounded retries for dependency installation (max 3 attempts)
+    - Missing-resource survivability: skips gracefully on missing resources
+    - Frozen executable detection: adjusts behavior for packaged builds
+    - All directory creation is guarded
+    - Import failures are warnings, not fatal errors
+    """
+
+    MAX_RETRY_ATTEMPTS = 3
+
+    def __init__(self, project_root: Optional[str] = None):
+        self._project_root = Path(project_root or os.getcwd())
+        self._frozen = _is_frozen()
+        self._result = SetupResult()
+        self._result.frozen_detected = self._frozen
+        self._result.environment_info = {
+            "platform": platform.platform(),
+            "python_version": sys.version,
+            "project_root": str(self._project_root),
+            "frozen": str(self._frozen),
+        }
+
+    def run_full_setup(self) -> SetupResult:
+        """Run the complete self-setup process."""
+        self._result = SetupResult()
+        self._result.frozen_detected = self._frozen
+        self._result.environment_info = {
+            "platform": platform.platform(),
+            "python_version": sys.version,
+            "project_root": str(self._project_root),
+            "frozen": str(self._frozen),
+        }
+
+        try:
+            self._ensure_data_directories()
+            self._ensure_config_directory()
+            if not self._frozen:
+                self._repair_path()
+                self._install_dependencies_with_retry()
+            else:
+                self._result.steps_completed.append("Frozen executable: PATH/dependency setup skipped")
+            self._verify_core_modules()
+            self._initialize_runtime()
+            if not self._frozen:
+                self._verify_deployment_startup()
+            else:
+                self._result.steps_completed.append("Frozen executable: deployment verification skipped")
+        except Exception as e:
+            self._result.errors.append(f"Self-setup encountered error: {e}")
+
+        self._result.success = len(self._result.errors) == 0
+        return self._result
+
+    def _ensure_data_directories(self) -> None:
+        """Ensure all required data directories exist."""
+        dirs = [
+            self._project_root / "data",
+            self._project_root / "data" / "logs",
+            self._project_root / "data" / "models",
+            self._project_root / "data" / "persistence",
+            self._project_root / "data" / "reports",
+        ]
+
+        for d in dirs:
+            if _safe_mkdir(d):
+                self._result.steps_completed.append(f"Created directory: {d.name}")
+            else:
+                self._result.warnings.append(
+                    f"Could not create directory {d}"
+                )
+
+    def _ensure_config_directory(self) -> None:
+        """Ensure config directory and default config exist."""
+        config_dir = self._project_root / "config"
+        config_file = config_dir / "default.yaml"
+
+        try:
+            if _safe_mkdir(config_dir):
+                self._result.steps_completed.append("Config directory verified")
+
+            if not config_file.exists():
+                self._create_default_config(config_file)
+                self._result.repairs_made.append(
+                    "Created default configuration file"
+                )
+        except Exception as e:
+            self._result.warnings.append(f"Config setup issue: {e}")
+
+    def _create_default_config(self, path: Path) -> None:
+        """Create a default configuration file."""
+        default_config = """# Corax Orchestrator - Default Configuration
+# Auto-generated by SelfSetup
+
+app:
+  name: CoraxOrchestrator
+  version: 1.0.0-alpha
+  debug: false
+  log_level: INFO
+
+paths:
+  data_dir: data
+  log_dir: data/logs
+  model_dir: data/models
+  persistence_dir: data/persistence
+  reports_dir: data/reports
+
+deployment:
+  max_concurrent: 3
+  timeout_seconds: 300
+  retry_attempts: 3
+  verify_after_deploy: true
+
+ai:
+  default_provider: ollama
+  providers:
+    ollama:
+      base_url: http://localhost:11434
+      timeout: 60
+    lm_studio:
+      base_url: http://localhost:1234
+      timeout: 60
+
+logging:
+  version: 1
+  formatters:
+    standard:
+      format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: INFO
+      formatter: standard
+    file:
+      class: logging.FileHandler
+      level: DEBUG
+      formatter: standard
+      filename: data/logs/corax.log
+  root:
+    level: INFO
+    handlers: [console, file]
+"""
+        try:
+            path.write_text(default_config, encoding="utf-8")
+        except Exception as e:
+            self._result.warnings.append(f"Failed to write default config: {e}")
+
+    def _repair_path(self) -> None:
+        """Repair PATH environment variable if needed."""
+        repairs = []
+
+        try:
+            # Check Python directory
+            python_dir = os.path.dirname(sys.executable)
+            path = os.environ.get("PATH", "")
+
+            if python_dir not in path:
+                repairs.append(f"Python directory: {python_dir}")
+                os.environ["PATH"] = f"{python_dir};{path}"
+
+            # Check Scripts directory (Windows)
+            if platform.system() == "Windows":
+                scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
+                if scripts_dir not in path:
+                    repairs.append(f"Scripts directory: {scripts_dir}")
+                    os.environ["PATH"] = f"{scripts_dir};{os.environ['PATH']}"
+
+            if repairs:
+                self._result.repairs_made.extend(
+                    [f"PATH repaired: {r}" for r in repairs]
+                )
+                self._result.steps_completed.append("PATH environment repaired")
+            else:
+                self._result.steps_completed.append("PATH environment verified")
+        except Exception as e:
+            self._result.warnings.append(f"PATH repair failed: {e}")
+
+    def _install_dependencies_with_retry(self) -> None:
+        """Install missing dependencies with bounded retries."""
+        for attempt in range(1, self.MAX_RETRY_ATTEMPTS + 1):
+            try:
+                self._install_dependencies()
+                # Check if installation succeeded by re-verifying
+                if self._result.steps_completed and "installed" in self._result.steps_completed[-1].lower():
+                    break
+            except Exception as e:
+                if attempt < self.MAX_RETRY_ATTEMPTS:
+                    continue
+                self._result.errors.append(
+                    f"Dependency installation failed after {self.MAX_RETRY_ATTEMPTS} attempts"
+                )
+
+    def _install_dependencies(self) -> None:
+        """Install missing dependencies automatically."""
+        requirements_file = self._project_root / "requirements.txt"
+
+        if not requirements_file.exists():
+            self._result.warnings.append(
+                "requirements.txt not found, skipping dependency installation"
+            )
+            return
+
+        try:
+            # Check if pip is available
+            pip_result = subprocess.run(
+                [sys.executable, "-m", "pip", "--version"],
+                capture_output=True, text=True, timeout=30
+            )
+            if pip_result.returncode != 0:
+                self._result.errors.append("pip is not available")
+                return
+
+            # Install dependencies
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r",
+                 str(requirements_file)],
+                capture_output=True, text=True, timeout=300
+            )
+
+            if result.returncode == 0:
+                self._result.steps_completed.append(
+                    "Dependencies installed successfully"
+                )
+            else:
+                # Try to parse which dependencies failed
+                failed_deps = []
+                for line in result.stderr.split("\n"):
+                    if "ERROR:" in line and "Could not find" in line:
+                        failed_deps.append(line.strip())
+
+                if failed_deps:
+                    self._result.errors.append(
+                        f"Failed to install: {', '.join(failed_deps)}"
+                    )
+                else:
+                    self._result.warnings.append(
+                        f"Dependency installation had issues: {result.stderr[:200]}"
+                    )
+
+        except subprocess.TimeoutExpired:
+            self._result.errors.append(
+                "Dependency installation timed out after 300 seconds"
+            )
+        except Exception as e:
+            self._result.errors.append(f"Dependency installation failed: {e}")
+
+    def _verify_core_modules(self) -> None:
+        """Verify core Python modules are importable."""
+        core_modules = [
+            "os", "sys", "json", "logging", "asyncio", "pathlib",
+            "typing", "dataclasses", "datetime", "abc", "ast",
+            "importlib", "inspect", "subprocess", "tempfile",
+            "functools", "collections", "enum", "io", "re",
+            "shutil", "threading", "time", "uuid", "warnings",
+            "types", "traceback", "argparse", "contextlib",
+            "itertools", "operator", "platform", "signal",
+            "socket", "ssl", "stat", "string", "struct",
+        ]
+
+        failed = []
+        for module in core_modules:
+            try:
+                __import__(module)
+            except ImportError:
+                failed.append(module)
+
+        if failed:
+            self._result.errors.append(
+                f"Core modules unavailable: {', '.join(failed)}"
+            )
+        else:
+            self._result.steps_completed.append(
+                "All core modules verified"
+            )
+
+    def _initialize_runtime(self) -> None:
+        """Initialize the Corax runtime environment."""
+        try:
+            sys.path.insert(0, str(self._project_root))
+
+            # Try to initialize logging
+            try:
+                from src.core.logging import setup_logging  # noqa: F401
+                self._result.steps_completed.append("Logging system initialized")
+            except ImportError as e:
+                self._result.warnings.append(f"Logging system not available: {e}")
+
+            # Try to initialize config
+            try:
+                from src.core.config import ConfigManager  # noqa: F401
+                self._result.steps_completed.append("Configuration system initialized")
+            except ImportError as e:
+                self._result.warnings.append(f"Configuration system not available: {e}")
+
+            self._result.steps_completed.append("Runtime environment initialized")
+
+        except Exception as e:
+            self._result.errors.append(f"Runtime initialization failed: {e}")
+
+    def _verify_deployment_startup(self) -> None:
+        """Verify deployment startup capability."""
+        try:
+            sys.path.insert(0, str(self._project_root))
+
+            # Try to load deployment orchestrator
+            try:
+                from src.deployment.orchestrator import DeploymentOrchestrator  # noqa: F401
+                self._result.steps_completed.append(
+                    "Deployment orchestrator verified"
+                )
+            except ImportError as e:
+                self._result.warnings.append(
+                    f"Deployment orchestrator not available: {e}"
+                )
+
+            # Try to load AI provider registry
+            try:
+                from src.agent.providers.registry import ProviderRegistry  # noqa: F401
+                self._result.steps_completed.append("AI provider registry verified")
+            except ImportError as e:
+                self._result.warnings.append(
+                    f"AI provider registry not available: {e}"
+                )
+
+            # Try to load model registry
+            try:
+                from src.deployment.models.registry import ModelRegistry  # noqa: F401
+                self._result.steps_completed.append("Model registry verified")
+            except ImportError as e:
+                self._result.warnings.append(
+                    f"Model registry not available: {e}"
+                )
+
+        except Exception as e:
+            self._result.warnings.append(
+                f"Deployment startup verification had issues: {e}"
+            )
+
+    def save_result(self, filepath: Optional[str] = None) -> str:
+        """Save the setup result to a JSON file."""
+        try:
+            if filepath is None:
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                filepath = str(
+                    self._project_root / "data" / "reports" / f"self_setup_{ts}.json"
+                )
+
+            path = Path(filepath)
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                # Fallback to current directory
+                path = Path(os.getcwd()) / f"self_setup_{ts}.json"
+
+            path.write_text(
+                json.dumps(self._result.to_dict(), indent=2, default=str),
+                encoding="utf-8"
+            )
+            return str(path)
+        except Exception as e:
+            return f""
+
+    def get_result(self) -> SetupResult:
+        """Get the current setup result."""
+        return self._result

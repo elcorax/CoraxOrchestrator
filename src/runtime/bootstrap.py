@@ -127,7 +127,16 @@ class BootstrapRuntime:
     MAX_RETRY_ATTEMPTS = 3
 
     def __init__(self, project_root: Optional[str] = None):
-        self._project_root = Path(project_root or os.getcwd())
+        if project_root:
+            self._project_root = Path(project_root)
+        elif _is_frozen():
+            bundle = _get_bundle_root()
+            if bundle:
+                self._project_root = Path(os.path.dirname(bundle))
+            else:
+                self._project_root = Path(os.getcwd())
+        else:
+            self._project_root = Path(os.getcwd())
         self._result = BootstrapResult()
         self._frozen = _is_frozen()
         self._bundle_root = _get_bundle_root()

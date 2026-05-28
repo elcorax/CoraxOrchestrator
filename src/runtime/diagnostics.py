@@ -345,7 +345,7 @@ class RuntimeDiagnostics:
             try:
                 log_dir.mkdir(parents=True, exist_ok=True)
             except Exception:
-                log_dir = Path(os.getcwd()) / "_corax_logs"
+                log_dir = Path(tempfile.gettempdir()) / "corax" / "_corax_logs"
                 log_dir.mkdir(parents=True, exist_ok=True)
 
             filepath = log_dir / filename

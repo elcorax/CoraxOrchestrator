@@ -1,0 +1,68 @@
+$ProjectRoot = "D:\CORAX\CoraxOrchestrator"
+$OutputDir = "$ProjectRoot\report"
+
+# حذف التقرير السابق إن وجد
+if (Test-Path $OutputDir) {
+    Remove-Item $OutputDir -Recurse -Force
+}
+
+# إنشاء مجلد التقرير
+New-Item -ItemType Directory -Path $OutputDir | Out-Null
+
+# إنشاء شجرة المشروع
+tree $ProjectRoot /F /A > "$OutputDir\PROJECT_TREE.txt"
+
+# نسخ الملفات الأساسية إن وجدت
+Copy-Item "$ProjectRoot\README.md" "$OutputDir\" -ErrorAction SilentlyContinue
+Copy-Item "$ProjectRoot\TODO.md" "$OutputDir\" -ErrorAction SilentlyContinue
+Copy-Item "$ProjectRoot\requirements.txt" "$OutputDir\" -ErrorAction SilentlyContinue
+Copy-Item "$ProjectRoot\pyproject.toml" "$OutputDir\" -ErrorAction SilentlyContinue
+Copy-Item "$ProjectRoot\main.py" "$OutputDir\" -ErrorAction SilentlyContinue
+Copy-Item "$ProjectRoot\launcher.py" "$OutputDir\" -ErrorAction SilentlyContinue
+Copy-Item "$ProjectRoot\bootstrap.py" "$OutputDir\" -ErrorAction SilentlyContinue
+
+# المجلدات المهمة
+$ImportantDirs = @(
+    "src",
+    "tests",
+    "diagnostics",
+    "deployment",
+    "runtime",
+    "gui",
+    "agent",
+    "installers",
+    "recovery"
+)
+
+foreach ($dir in $ImportantDirs) {
+
+    $Source = Join-Path $ProjectRoot $dir
+
+    if (Test-Path $Source) {
+
+        $Dest = Join-Path $OutputDir $dir
+
+        Copy-Item $Source $Dest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ضغط التقرير
+$ZipPath = "$ProjectRoot\report.zip"
+
+if (Test-Path $ZipPath) {
+    Remove-Item $ZipPath -Force
+}
+
+Compress-Archive -Path "$OutputDir\*" -DestinationPath $ZipPath
+
+Write-Host ""
+Write-Host "====================================="
+Write-Host "REPORT GENERATED"
+Write-Host "====================================="
+Write-Host ""
+Write-Host "Folder:"
+Write-Host $OutputDir
+Write-Host ""
+Write-Host "ZIP:"
+Write-Host $ZipPath
+Write-Host ""
