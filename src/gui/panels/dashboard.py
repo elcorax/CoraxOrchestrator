@@ -283,8 +283,8 @@ class DashboardPanel(QWidget):
                     label.setObjectName(style)
                     label.style().unpolish(label)
                     label.style().polish(label)
-                except Exception:
-                    pass
+                except Exception as inner_e:
+                    logger.warning(f"Dashboard card style update suppressed: {inner_e}")
 
             # Update retry queue - guarded
             if hasattr(self, '_retry_list') and self._retry_list is not None:

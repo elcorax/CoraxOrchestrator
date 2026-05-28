@@ -188,17 +188,23 @@ class DeploymentProgressPanel(QWidget):
             self._refresh_timer.stop()
 
     def _on_progress(self, progress) -> None:
-        """Handle progress updates."""
-        pct = getattr(progress, 'progress_percent', 0)
-        step = getattr(progress, 'current_step', '')
-        status = getattr(progress, 'status', None)
+        """Handle progress updates - crash-safe."""
+        try:
+            pct = getattr(progress, 'progress_percent', 0)
+            step = getattr(progress, 'current_step', '')
+            status = getattr(progress, 'status', None)
 
-        self._overall_bar.setValue(int(pct))
-        self._percent_label.setText(f"{pct:.0f}%")
-        self._phase_label.setText(f"Phase: {step}")
+            if hasattr(self, '_overall_bar') and self._overall_bar:
+                self._overall_bar.setValue(int(pct))
+            if hasattr(self, '_percent_label') and self._percent_label:
+                self._percent_label.setText(f"{pct:.0f}%")
+            if hasattr(self, '_phase_label') and self._phase_label:
+                self._phase_label.setText(f"Phase: {step}")
 
-        if status:
-            self._add_log(f"[{status}] {step} ({pct:.0f}%)")
+            if status:
+                self._add_log(f"[{status}] {step} ({pct:.0f}%)")
+        except Exception as e:
+            logger.warning(f"Progress update suppressed: {e}")
 
     def _update_display(self) -> None:
         """Update display from centralized UI state."""
@@ -256,8 +262,8 @@ class DeploymentProgressPanel(QWidget):
                     self._cmd_display.setText(ops[0].current_command)
                 else:
                     self._cmd_display.clear()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"DeploymentProgress display update suppressed: {e}")
 
     def _add_log(self, text: str) -> None:
         """Add log entry."""

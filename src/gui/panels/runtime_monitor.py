@@ -271,8 +271,8 @@ class RuntimeMonitorPanel(QWidget):
                         self._remaining_label.setText("Remaining: --")
                 if hasattr(self, '_current_tool_label') and self._current_tool_label:
                     self._current_tool_label.setText("Tool: --")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"RuntimeMonitor refresh suppressed: {e}")
 
     def _clear_terminal(self) -> None:
         """Clear the terminal output."""

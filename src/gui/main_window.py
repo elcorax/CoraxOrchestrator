@@ -436,8 +436,8 @@ class MainWindow(QMainWindow):
                 self._deploy_status.setText(f"Deployment: {ui_state.deployment_status}")
             if hasattr(self, '_health_status') and self._health_status:
                 self._health_status.setText(f"Health: {ui_state.system_health}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Status bar update suppressed: {e}")
 
     def _switch_to_tab(self, index: int) -> None:
         """Switch to a specific tab."""

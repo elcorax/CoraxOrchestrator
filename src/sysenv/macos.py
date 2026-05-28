@@ -36,8 +36,8 @@ class MacOSPlatform(PlatformBase):
         return PlatformInfo(
             platform_type=PlatformType.MACOS,
             architecture=detect_architecture(),
-            os_version=platform.version(),
-            hostname=platform.node(),
+            os_version=_stdlib_platform.version(),
+            hostname=_stdlib_platform.node(),
             is_admin=self.is_admin(),
             is_wsl=False,
             is_container=self._is_container(),
@@ -194,14 +194,14 @@ class MacOSPlatform(PlatformBase):
             )
             name = result.stdout.strip()
         except Exception:
-            name = platform.processor()
+            name = _stdlib_platform.processor()
 
         return {
             "name": name,
             "cores": psutil.cpu_count(logical=False),
             "logical_processors": psutil.cpu_count(logical=True),
             "max_clock_speed_mhz": None,
-            "architecture": platform.machine(),
+            "architecture": _stdlib_platform.machine(),
             "manufacturer": "Apple" if "Apple" in name else "Intel",
         }
 

@@ -44,8 +44,8 @@ class LinuxPlatform(PlatformBase):
         return PlatformInfo(
             platform_type=PlatformType.LINUX,
             architecture=detect_architecture(),
-            os_version=platform.version(),
-            hostname=platform.node(),
+            os_version=_stdlib_platform.version(),
+            hostname=_stdlib_platform.node(),
             is_admin=self.is_admin(),
             is_wsl=is_wsl,
             is_container=self._is_container(),
@@ -197,14 +197,14 @@ class LinuxPlatform(PlatformBase):
                     name = line.split(":")[1].strip()
                     break
         except FileNotFoundError:
-            name = platform.processor()
+            name = _stdlib_platform.processor()
 
         return {
             "name": name,
             "cores": psutil.cpu_count(logical=False),
             "logical_processors": psutil.cpu_count(logical=True),
             "max_clock_speed_mhz": None,
-            "architecture": platform.machine(),
+            "architecture": _stdlib_platform.machine(),
             "manufacturer": None,
         }
 
