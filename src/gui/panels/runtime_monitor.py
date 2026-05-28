@@ -33,15 +33,35 @@ class RuntimeMonitorPanel(QWidget):
     def __init__(self, kernel: Any = None):
         super().__init__()
         self._kernel = kernel
+        self._initialized = False
         self._refresh_timer = QTimer()
-        self._refresh_timer.timeout.connect(self._refresh)
+        self._refresh_timer.timeout.connect(self._safe_refresh)
+        self._refresh_timer.setObjectName("runtime_monitor_refresh")
         self._terminal_lines: List[str] = []
         self._max_terminal_lines = 500
         self._subscriber_id: Optional[str] = None
+        self._stale_warning_count = 0
+        self._max_stale_warnings = 3
 
         self._setup_ui()
+        self._initialized = True
         self._subscribe_to_state_bus()
         self._refresh_timer.start(1000)
+
+    def _safe_refresh(self) -> None:
+        """Exception-safe timer refresh with stale-state protection."""
+        try:
+            if not getattr(self, '_initialized', False):
+                return
+            if not self.isVisible():
+                return
+            self._refresh()
+        except Exception as e:
+            self._stale_warning_count += 1
+            if self._stale_warning_count <= self._max_stale_warnings:
+                logger.warning(f"RuntimeMonitor safe_refresh suppressed: {e}")
+            if self._stale_warning_count > self._max_stale_warnings + 5:
+                self._stale_warning_count = self._max_stale_warnings + 5
 
     def _subscribe_to_state_bus(self) -> None:
         """Subscribe to state bus for live telemetry events via anonymous subscriber."""

@@ -32,15 +32,38 @@ class DashboardPanel(QWidget):
     def __init__(self, kernel: Any = None):
         super().__init__()
         self._kernel = kernel
-        self._refresh_timer = QTimer()
-        self._refresh_timer.timeout.connect(self._refresh)
+        self._initialized = False
         self._scan_result = None
 
         self._setup_ui()
+        self._initialized = True
+
+        self._refresh_timer = QTimer()
+        self._refresh_timer.timeout.connect(self._safe_refresh)
         self._refresh_timer.start(2000)
+        self._refresh_timer.setObjectName("dashboard_refresh")
 
         # Register for state changes
         ui_state.on_state_change(self._on_ui_state_change)
+        self._stale_warning_count = 0
+        self._max_stale_warnings = 3
+
+    def _safe_refresh(self) -> None:
+        """Exception-safe timer refresh with stale-state protection."""
+        try:
+            # Stale-state: skip if not initialized or widget is hidden
+            if not getattr(self, '_initialized', False):
+                return
+            if not self.isVisible():
+                return
+            self._refresh()
+        except Exception as e:
+            self._stale_warning_count += 1
+            if self._stale_warning_count <= self._max_stale_warnings:
+                logger.warning(f"Dashboard safe_refresh suppressed: {e}")
+            if self._stale_warning_count > self._max_stale_warnings + 5:
+                self._stale_warning_count = self._max_stale_warnings + 5
+
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
