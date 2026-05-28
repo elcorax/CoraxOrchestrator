@@ -26,6 +26,7 @@ import time
 import traceback
 
 from src.core.logging import get_logger
+from src.deployment.operations import FailureCategory
 from src.deployment.hardening.failure_classifier import (
     InstallerFailureClassifier,
     FailureAnalysisResult,
@@ -135,6 +136,7 @@ class RecoveryDecision:
     operator_notified: bool = False
     errors: List[str] = field(default_factory=list)
     diagnostics: Dict[str, Any] = field(default_factory=dict)
+    duration_ms: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -218,13 +220,20 @@ class SmartRecoveryEngine:
 
         try:
             # 1. Classify the failure
-            failure_result = self._failure_classifier.analyze_failure(
-                error=error,
-                context=failure_context or {},
+            # Extract error details for the classifier
+            error_msg = str(error)
+            context = failure_context or {}
+            tool_key = context.get("tool_key", "unknown")
+            failure_result = self._failure_classifier.analyze(
+                tool_key=tool_key,
+                exit_code=context.get("exit_code", -1),
+                stderr=error_msg,
+                error_message=error_msg,
+                context=context,
             )
 
             decision.diagnostics["failure_analysis"] = failure_result.to_dict()
-            decision.diagnostics["failure_category"] = failure_result.category
+            decision.diagnostics["failure_category"] = failure_result.failure_category
 
             # 2. Update failure tracking
             self._step_failure_counts[step_name] = (
@@ -248,7 +257,21 @@ class SmartRecoveryEngine:
                 self._record_recovery(step_name, decision)
                 return decision
 
-            # 4. Check retry budget
+            # 4. Auto-quarantine if threshold exceeded (check BEFORE retry budget)
+            if self._step_consecutive_failures[step_name] >= self.QUARANTINE_THRESHOLD:
+                self._quarantine_step(step_name)
+                decision.step_quarantined = True
+                decision.should_retry = False
+                decision.escalation_level = EscalationLevel.QUARANTINE
+                decision.actions.append(RecoveryAction(
+                    level=EscalationLevel.QUARANTINE,
+                    action=f"Step '{step_name}' quarantined after {self.QUARANTINE_THRESHOLD} consecutive failures",
+                ))
+                decision.duration_ms = (time.time() - start) * 1000
+                self._record_recovery(step_name, decision)
+                return decision
+
+            # 5. Check retry budget
             can_retry, budget_msg = self._retry_budget.can_retry(step_name)
             if not can_retry:
                 decision.should_retry = False
@@ -275,8 +298,8 @@ class SmartRecoveryEngine:
                 self._record_recovery(step_name, decision)
                 return decision
 
-            # 5. Determine retry strategy based on failure category
-            retry_strategy = self._select_retry_strategy(failure_result)
+            # 6. Determine retry strategy based on failure category
+            retry_strategy = self._select_retry_strategy(step_name, failure_result)
             decision.should_retry = retry_strategy["should_retry"]
             decision.retry_delay = retry_strategy["delay_seconds"]
 
@@ -307,15 +330,6 @@ class SmartRecoveryEngine:
                         "consecutive_failures": self._step_consecutive_failures[step_name],
                     },
                 ))
-
-                # Auto-quarantine if threshold exceeded
-                if self._step_consecutive_failures[step_name] >= self.QUARANTINE_THRESHOLD:
-                    self._quarantine_step(step_name)
-                    decision.step_quarantined = True
-                    decision.actions.append(RecoveryAction(
-                        level=EscalationLevel.QUARANTINE,
-                        action=f"Step '{step_name}' quarantined after {self.QUARANTINE_THRESHOLD} consecutive failures",
-                    ))
             else:
                 # Non-retryable failure
                 escalation = self._determine_escalation(
@@ -324,7 +338,7 @@ class SmartRecoveryEngine:
                 decision.escalation_level = escalation
                 decision.actions.append(RecoveryAction(
                     level=escalation,
-                    action=f"Non-retryable failure: {failure_result.category}",
+                    action=f"Non-retryable failure: {failure_result.failure_category}",
                 ))
 
                 if escalation == EscalationLevel.SAFE_MODE:
@@ -359,7 +373,7 @@ class SmartRecoveryEngine:
     # ------------------------------------------------------------------
 
     def _select_retry_strategy(
-        self, failure_result: FailureAnalysisResult
+        self, step_name: str, failure_result: FailureAnalysisResult
     ) -> Dict[str, Any]:
         """
         Select the best retry strategy based on failure classification.
@@ -370,13 +384,11 @@ class SmartRecoveryEngine:
             use_cooldown: bool
             cooldown_seconds: int
         """
-        category = failure_result.category
+        category = failure_result.failure_category
 
         # Temporary failures (network, timeout) -> retry with backoff
-        if category in ("temporary", "timeout", "network"):
-            consecutive = self._step_consecutive_failures.get(
-                failure_result.context.get("step_name", ""), 0
-            )
+        if category in (FailureCategory.TEMPORARY, FailureCategory.TIMEOUT, FailureCategory.NETWORK):
+            consecutive = self._step_consecutive_failures.get(step_name, 0)
             delay = min(
                 self.COOLDOWN_BASE_SECONDS * (2 ** (consecutive)),
                 self.COOLDOWN_MAX_SECONDS,
@@ -389,10 +401,8 @@ class SmartRecoveryEngine:
             }
 
         # Permission failures -> limited retries, then escalate
-        if category == "permission":
-            consecutive = self._step_consecutive_failures.get(
-                failure_result.context.get("step_name", ""), 0
-            )
+        if category == FailureCategory.PERMISSION:
+            consecutive = self._step_consecutive_failures.get(step_name, 0)
             if consecutive < 2:
                 return {
                     "should_retry": True,
@@ -409,7 +419,7 @@ class SmartRecoveryEngine:
                 }
 
         # Dependency failures -> retry with longer backoff
-        if category == "dependency":
+        if category == FailureCategory.DEPENDENCY:
             return {
                 "should_retry": True,
                 "delay_seconds": 10.0,
@@ -418,7 +428,7 @@ class SmartRecoveryEngine:
             }
 
         # Disk space -> retry once (might be freed), then escalate
-        if category == "disk_space":
+        if category == FailureCategory.DISK_SPACE:
             return {
                 "should_retry": True,
                 "delay_seconds": 5.0,
@@ -427,7 +437,7 @@ class SmartRecoveryEngine:
             }
 
         # Corruption -> retry once with fresh download
-        if category == "corruption":
+        if category == FailureCategory.CORRUPTION:
             return {
                 "should_retry": True,
                 "delay_seconds": 3.0,
@@ -436,7 +446,7 @@ class SmartRecoveryEngine:
             }
 
         # Compatibility -> no retry, escalate immediately
-        if category == "compatibility":
+        if category == FailureCategory.COMPATIBILITY:
             return {
                 "should_retry": False,
                 "delay_seconds": 0,
@@ -487,11 +497,11 @@ class SmartRecoveryEngine:
             return EscalationLevel.COOLDOWN
 
         # By failure category
-        if failure_result.category in ("compatibility", "permission"):
+        if failure_result.failure_category in (FailureCategory.COMPATIBILITY, FailureCategory.PERMISSION):
             return EscalationLevel.OPERATOR
-        elif failure_result.category == "disk_space":
+        elif failure_result.failure_category == FailureCategory.DISK_SPACE:
             return EscalationLevel.SAFE_MODE
-        elif failure_result.category == "corruption":
+        elif failure_result.failure_category == FailureCategory.CORRUPTION:
             return EscalationLevel.COOLDOWN
 
         return EscalationLevel.RETRY

@@ -43,7 +43,7 @@ logger = get_logger(__name__)
 class AIValidationResult:
     """Result of an AI validation check."""
     check_name: str
-    passed: bool
+    passed: bool = True
     details: Dict[str, Any] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
