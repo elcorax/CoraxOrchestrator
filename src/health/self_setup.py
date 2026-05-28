@@ -7,6 +7,9 @@ dependency recovery, and deployment startup verification.
 
 Ensures new machines can initialize correctly and broken environments
 can recover automatically.
+
+Survivability-hardened: bounded retries, missing-resource survivability,
+graceful degradation under frozen execution, safe startup logging.
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -21,6 +24,20 @@ import sys
 from pathlib import Path
 
 
+def _is_frozen() -> bool:
+    """Detect if running as a PyInstaller executable."""
+    return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+
+
+def _safe_mkdir(path: Path) -> bool:
+    """Safely create a directory, return True on success."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception:
+        return False
+
+
 @dataclass
 class SetupResult:
     """Result of the self-setup process."""
@@ -32,18 +49,23 @@ class SetupResult:
     warnings: List[str] = field(default_factory=list)
     repairs_made: List[str] = field(default_factory=list)
     environment_info: Dict[str, str] = field(default_factory=dict)
+    frozen_detected: bool = False
 
     def to_dict(self) -> Dict:
-        return {
-            "timestamp": self.timestamp,
-            "success": self.success,
-            "steps_completed": self.steps_completed,
-            "steps_failed": self.steps_failed,
-            "errors": self.errors,
-            "warnings": self.warnings,
-            "repairs_made": self.repairs_made,
-            "environment_info": self.environment_info,
-        }
+        try:
+            return {
+                "timestamp": self.timestamp,
+                "success": self.success,
+                "steps_completed": self.steps_completed,
+                "steps_failed": self.steps_failed,
+                "errors": self.errors,
+                "warnings": self.warnings,
+                "repairs_made": self.repairs_made,
+                "environment_info": self.environment_info,
+                "frozen_detected": self.frozen_detected,
+            }
+        except Exception:
+            return {"success": False, "error": "Failed to serialize setup result"}
 
 
 class SelfSetup:
@@ -53,33 +75,56 @@ class SelfSetup:
     Handles dependency installation, PATH repair, runtime initialization,
     and deployment startup verification. Designed to recover broken
     environments and initialize new machines.
+
+    Survivability:
+    - Bounded retries for dependency installation (max 3 attempts)
+    - Missing-resource survivability: skips gracefully on missing resources
+    - Frozen executable detection: adjusts behavior for packaged builds
+    - All directory creation is guarded
+    - Import failures are warnings, not fatal errors
     """
+
+    MAX_RETRY_ATTEMPTS = 3
 
     def __init__(self, project_root: Optional[str] = None):
         self._project_root = Path(project_root or os.getcwd())
+        self._frozen = _is_frozen()
         self._result = SetupResult()
+        self._result.frozen_detected = self._frozen
         self._result.environment_info = {
             "platform": platform.platform(),
             "python_version": sys.version,
             "project_root": str(self._project_root),
+            "frozen": str(self._frozen),
         }
 
     def run_full_setup(self) -> SetupResult:
         """Run the complete self-setup process."""
         self._result = SetupResult()
+        self._result.frozen_detected = self._frozen
         self._result.environment_info = {
             "platform": platform.platform(),
             "python_version": sys.version,
             "project_root": str(self._project_root),
+            "frozen": str(self._frozen),
         }
 
-        self._ensure_data_directories()
-        self._ensure_config_directory()
-        self._repair_path()
-        self._install_dependencies()
-        self._verify_core_modules()
-        self._initialize_runtime()
-        self._verify_deployment_startup()
+        try:
+            self._ensure_data_directories()
+            self._ensure_config_directory()
+            if not self._frozen:
+                self._repair_path()
+                self._install_dependencies_with_retry()
+            else:
+                self._result.steps_completed.append("Frozen executable: PATH/dependency setup skipped")
+            self._verify_core_modules()
+            self._initialize_runtime()
+            if not self._frozen:
+                self._verify_deployment_startup()
+            else:
+                self._result.steps_completed.append("Frozen executable: deployment verification skipped")
+        except Exception as e:
+            self._result.errors.append(f"Self-setup encountered error: {e}")
 
         self._result.success = len(self._result.errors) == 0
         return self._result
@@ -95,12 +140,11 @@ class SelfSetup:
         ]
 
         for d in dirs:
-            try:
-                d.mkdir(parents=True, exist_ok=True)
+            if _safe_mkdir(d):
                 self._result.steps_completed.append(f"Created directory: {d.name}")
-            except Exception as e:
+            else:
                 self._result.warnings.append(
-                    f"Could not create directory {d}: {e}"
+                    f"Could not create directory {d}"
                 )
 
     def _ensure_config_directory(self) -> None:
@@ -109,8 +153,8 @@ class SelfSetup:
         config_file = config_dir / "default.yaml"
 
         try:
-            config_dir.mkdir(parents=True, exist_ok=True)
-            self._result.steps_completed.append("Config directory verified")
+            if _safe_mkdir(config_dir):
+                self._result.steps_completed.append("Config directory verified")
 
             if not config_file.exists():
                 self._create_default_config(config_file)
@@ -173,34 +217,55 @@ logging:
     level: INFO
     handlers: [console, file]
 """
-        path.write_text(default_config, encoding="utf-8")
+        try:
+            path.write_text(default_config, encoding="utf-8")
+        except Exception as e:
+            self._result.warnings.append(f"Failed to write default config: {e}")
 
     def _repair_path(self) -> None:
         """Repair PATH environment variable if needed."""
         repairs = []
 
-        # Check Python directory
-        python_dir = os.path.dirname(sys.executable)
-        path = os.environ.get("PATH", "")
+        try:
+            # Check Python directory
+            python_dir = os.path.dirname(sys.executable)
+            path = os.environ.get("PATH", "")
 
-        if python_dir not in path:
-            repairs.append(f"Python directory: {python_dir}")
-            os.environ["PATH"] = f"{python_dir};{path}"
+            if python_dir not in path:
+                repairs.append(f"Python directory: {python_dir}")
+                os.environ["PATH"] = f"{python_dir};{path}"
 
-        # Check Scripts directory (Windows)
-        if platform.system() == "Windows":
-            scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
-            if scripts_dir not in path:
-                repairs.append(f"Scripts directory: {scripts_dir}")
-                os.environ["PATH"] = f"{scripts_dir};{os.environ['PATH']}"
+            # Check Scripts directory (Windows)
+            if platform.system() == "Windows":
+                scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
+                if scripts_dir not in path:
+                    repairs.append(f"Scripts directory: {scripts_dir}")
+                    os.environ["PATH"] = f"{scripts_dir};{os.environ['PATH']}"
 
-        if repairs:
-            self._result.repairs_made.extend(
-                [f"PATH repaired: {r}" for r in repairs]
-            )
-            self._result.steps_completed.append("PATH environment repaired")
-        else:
-            self._result.steps_completed.append("PATH environment verified")
+            if repairs:
+                self._result.repairs_made.extend(
+                    [f"PATH repaired: {r}" for r in repairs]
+                )
+                self._result.steps_completed.append("PATH environment repaired")
+            else:
+                self._result.steps_completed.append("PATH environment verified")
+        except Exception as e:
+            self._result.warnings.append(f"PATH repair failed: {e}")
+
+    def _install_dependencies_with_retry(self) -> None:
+        """Install missing dependencies with bounded retries."""
+        for attempt in range(1, self.MAX_RETRY_ATTEMPTS + 1):
+            try:
+                self._install_dependencies()
+                # Check if installation succeeded by re-verifying
+                if self._result.steps_completed and "installed" in self._result.steps_completed[-1].lower():
+                    break
+            except Exception as e:
+                if attempt < self.MAX_RETRY_ATTEMPTS:
+                    continue
+                self._result.errors.append(
+                    f"Dependency installation failed after {self.MAX_RETRY_ATTEMPTS} attempts"
+                )
 
     def _install_dependencies(self) -> None:
         """Install missing dependencies automatically."""
@@ -294,15 +359,15 @@ logging:
             try:
                 from src.core.logging import setup_logging  # noqa: F401
                 self._result.steps_completed.append("Logging system initialized")
-            except ImportError:
-                self._result.warnings.append("Logging system not available")
+            except ImportError as e:
+                self._result.warnings.append(f"Logging system not available: {e}")
 
             # Try to initialize config
             try:
                 from src.core.config import ConfigManager  # noqa: F401
                 self._result.steps_completed.append("Configuration system initialized")
-            except ImportError:
-                self._result.warnings.append("Configuration system not available")
+            except ImportError as e:
+                self._result.warnings.append(f"Configuration system not available: {e}")
 
             self._result.steps_completed.append("Runtime environment initialized")
 
@@ -350,19 +415,27 @@ logging:
 
     def save_result(self, filepath: Optional[str] = None) -> str:
         """Save the setup result to a JSON file."""
-        if filepath is None:
-            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            filepath = str(
-                self._project_root / "data" / "reports" / f"self_setup_{ts}.json"
-            )
+        try:
+            if filepath is None:
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                filepath = str(
+                    self._project_root / "data" / "reports" / f"self_setup_{ts}.json"
+                )
 
-        path = Path(filepath)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(self._result.to_dict(), indent=2, default=str),
-            encoding="utf-8"
-        )
-        return str(path)
+            path = Path(filepath)
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                # Fallback to current directory
+                path = Path(os.getcwd()) / f"self_setup_{ts}.json"
+
+            path.write_text(
+                json.dumps(self._result.to_dict(), indent=2, default=str),
+                encoding="utf-8"
+            )
+            return str(path)
+        except Exception as e:
+            return f""
 
     def get_result(self) -> SetupResult:
         """Get the current setup result."""
