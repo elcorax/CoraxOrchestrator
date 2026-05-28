@@ -45,6 +45,8 @@ def _resolve_config_dir(config_dir: Optional[Path]) -> Path:
         bundle = _get_bundle_root()
         if bundle:
             return Path(os.path.join(os.path.dirname(bundle), "config"))
+        # Frozen without bundle: fallback to home dir
+        return Path(os.path.expanduser("~")) / ".corax" / "config"
     return Path("config")
 
 # Type for nested configuration dictionaries

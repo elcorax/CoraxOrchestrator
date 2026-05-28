@@ -177,7 +177,13 @@ class RuntimeDiagnostics:
     """
 
     def __init__(self, project_root: Optional[str] = None):
-        self._project_root = Path(project_root or os.getcwd())
+        if project_root:
+            self._project_root = Path(project_root)
+        elif _is_frozen():
+            # Frozen: use home dir instead of potentially unwritable cwd
+            self._project_root = Path(os.path.expanduser("~")) / ".corax"
+        else:
+            self._project_root = Path(os.getcwd())
         self._report = RuntimeDiagnosticReport()
         self._report.frozen_detected = _is_frozen()
         self._phase_timers: Dict[str, datetime] = {}

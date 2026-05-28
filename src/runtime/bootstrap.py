@@ -134,7 +134,8 @@ class BootstrapRuntime:
             if bundle:
                 self._project_root = Path(os.path.dirname(bundle))
             else:
-                self._project_root = Path(os.getcwd())
+                # Frozen without bundle: use home dir, not cwd (cwd may be bundle temp)
+                self._project_root = Path(os.path.expanduser("~")) / ".corax"
         else:
             self._project_root = Path(os.getcwd())
         self._result = BootstrapResult()

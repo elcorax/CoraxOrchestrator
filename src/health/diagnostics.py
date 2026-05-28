@@ -241,7 +241,7 @@ class StartupDiagnostics:
         self._report = DiagnosticReport()
         self._report.frozen_detected = _is_frozen()
         self._log_dir = log_dir or os.path.join(
-            os.getcwd(), "data", "logs"
+            os.path.expanduser("~") if _is_frozen() else os.getcwd(), "data", "logs"
         )
         self._start_time = datetime.now(timezone.utc)
         self._phase_timers: Dict[str, datetime] = {}
