@@ -44,18 +44,19 @@ logger = get_logger(__name__)
 
 class ExecutionEngine:
     """
-    Manages the lifecycle of workflow execution.
+    Corax Orchestrator - Autonomous Execution Engine.
 
-    Features:
-    - Sequential and dependency-aware step execution
-    - Pause/resume/cancel workflow control
-    - Automatic retry on failure
-    - Timeout enforcement
-    - Progress tracking with callbacks
-    - Integration with agent modes for action approval
-    - Capability-based execution (terminal, process, installer, desktop, browser)
-    - Sandbox security enforcement
-    - Execution recovery with checkpoints
+    Orchestrates multi-step workflows with capability-based execution,
+    self-healing retry, rollback, and comprehensive diagnostics.
+
+    The execution engine:
+    - Loads and validates workflows
+    - Executes steps using registered capabilities
+    - Handles retries with exponential backoff
+    - Supports rollback on failure
+    - Provides real-time progress via RuntimeStateBus
+    - Supports cancellation with bounded cleanup (M42)
+    - Execution context survivability with orphan-state cleanup (M42)
     """
 
     def __init__(
@@ -394,12 +395,74 @@ class ExecutionEngine:
             logger.info("Workflow resumed")
 
     async def cancel(self) -> None:
-        """Cancel workflow execution."""
+        """Cancel workflow execution with bounded cleanup.
+
+        — M42: Ensures no orphan execution state on cancellation.
+        Cleans up active capabilities, resets execution context,
+        and removes stale state markers from disk.
+        """
         if self._running:
             self._cancelled = True
             self._pause_event.set()  # Unblock if paused
             await self._update_agent_status(AgentStatus.CANCELLED)
             logger.info("Workflow cancelled")
+
+            # — M42: Cancel any active capability operations
+            await self._cancel_active_capabilities()
+
+            # — M42: Cleanup orphaned state markers from disk
+            self._cleanup_execution_state_markers()
+
+    async def _cancel_active_capabilities(self) -> None:
+        """Cancel any actively running capability operations.
+
+        — M42: Prevents orphan capability execution after cancellation.
+        Attempts graceful shutdown of each capability, with bounded
+        timeout per capability.
+        """
+        for name, cap in list(self._capabilities.items()):
+            try:
+                # Attempt to shutdown capability gracefully
+                import asyncio
+                await asyncio.wait_for(
+                    cap.shutdown(),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Capability shutdown timed out during cancel: {name}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Capability shutdown error during cancel: {name}: {e}"
+                )
+
+    def _cleanup_execution_state_markers(self) -> None:
+        """Clean up orphaned execution state marker files from disk.
+
+        — M42: Prevents stale execution markers from persisting across
+        restarts after a cancelled workflow.
+        """
+        try:
+            import os
+            from pathlib import Path
+
+            project_root = Path(os.getcwd())
+            markers = [
+                "_corax_exec_active",
+                "_corax_state_dirty",
+                "_corax_session_active",
+            ]
+            for marker_name in markers:
+                marker = project_root / marker_name
+                if marker.exists():
+                    try:
+                        marker.unlink()
+                    except (PermissionError, OSError):
+                        pass
+        except Exception:
+            pass  # Non-critical cleanup
+
 
     def is_running(self) -> bool:
         """Check if a workflow is currently running."""

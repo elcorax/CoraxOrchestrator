@@ -312,12 +312,94 @@ class RuntimeStateBus:
         logger.info("RuntimeStateBus started async")
 
     def stop(self) -> None:
-        """Stop the bus."""
+        """Stop the bus. Survivability: bounded cancellation, no orphan state."""
+        if not self._running:
+            return
         self._running = False
         if self._processor_task:
             self._processor_task.cancel()
             self._processor_task = None
-        logger.info("RuntimeStateBus stopped")
+
+        # ── M42: Clean up orphan event queue state ────────────────────
+        # Drain remaining items in queue to prevent memory leaks
+        try:
+            while not self._event_queue.empty():
+                try:
+                    self._event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        except Exception:
+            pass
+
+        # Trim event history to bounded size to prevent stale growth
+        if len(self._event_history) > 100:
+            self._event_history = deque(
+                list(self._event_history)[-100:],
+                maxlen=1000
+            )
+
+        # ── M43: Clear stale telemetry references ─────────────────────
+        self._telemetry._operation_durations.clear()
+        self._telemetry._tool_completions.clear()
+        self._telemetry._total_events = 0
+        self._telemetry._start_time = time.time()
+
+        logger.info("RuntimeStateBus stopped with bounded cleanup")
+
+    def reset_for_reconnect(self) -> None:
+        """Reset bus for runtime reconnect scenarios (M44).
+        
+        Cleans stale state while preserving subscriber attachments
+        for rapid reconnect without full reinitialization.
+        Survivability: bounded reset, no orphan state, no progressive degradation.
+        """
+        old_running = self._running
+        self._running = False
+        
+        # Cancel processor task safely
+        if self._processor_task:
+            self._processor_task.cancel()
+            self._processor_task = None
+        
+        # Drain event queue
+        try:
+            while not self._event_queue.empty():
+                try:
+                    self._event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        except Exception:
+            pass
+        
+        # Trim history but preserve recent events for context
+        if len(self._event_history) > 50:
+            self._event_history = deque(
+                list(self._event_history)[-50:],
+                maxlen=1000
+            )
+        
+        # Reset telemetry accumulators
+        self._telemetry._operation_durations.clear()
+        self._telemetry._tool_completions.clear()
+        self._telemetry._total_events = 0
+        self._telemetry._start_time = time.time()
+        self._telemetry._failure_counts.clear()
+        self._telemetry._success_counts.clear()
+        self._telemetry._component_status.clear()
+        
+        # Reset ETA tracker
+        self._eta_tracker._deployment_start_time = None
+        self._eta_tracker._completed_operations.clear()
+        self._eta_tracker._failed_operations = 0
+        self._eta_tracker._total_operations = 0
+        self._eta_tracker._progress_percent = 0.0
+        
+        logger.info("RuntimeStateBus reset for reconnect")
+        
+        # Restart if was running
+        if old_running:
+            self.start()
+
 
     async def _process_loop(self) -> None:
         """Background processor for queued events."""

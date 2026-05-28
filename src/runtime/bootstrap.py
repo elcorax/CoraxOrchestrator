@@ -107,6 +107,10 @@ class BootstrapRuntime:
     - Temp-path fallback for bundle environments
     - Graceful degradation under partial failure
     - Bounded retry for dependency repairs
+    - Interrupted shutdown detection and stale-state cleanup
+    - Startup lock file survivability
+    - Stale temp-state restoration guards
+    - Startup fallback sequencing after partial init failure
     """
 
     MIN_PYTHON_VERSION = (3, 10)
@@ -231,7 +235,320 @@ class BootstrapRuntime:
                     f"Dependency repair failed after {max_attempts} attempts: {e}"
                 )
 
+    def _get_current_time(self) -> float:
+        """Get current time with safe import."""
+        import time as _t
+        return _t.time()
+
+    def cleanup_stale_temp(self) -> None:
+        """Clean up stale temp files from interrupted previous runs.
+
+        Removes lock files, state files, and temp artifacts older than 1 hour.
+        Uses bounded cleanup: max 50 files, no subdirectory recursion.
+        Guarded: never raises, logs warnings on failure.
+
+        — M41: Extended stale-state cleanup — also cleans persistence state
+        files, corrupted checkpoint files, orphaned session files, and
+        corrupted runtime state markers.
+        """
+        try:
+            now = self._get_current_time()
+            cutoff = now - 3600  # 1 hour
+            temp_dir = self._project_root / "_corax_temp"
+            if temp_dir.exists():
+                count = 0
+                max_cleanup = 50
+                for f in temp_dir.iterdir():
+                    if count >= max_cleanup:
+                        break
+                    try:
+                        if f.is_file() and f.stat().st_mtime < cutoff:
+                            f.unlink()
+                            count += 1
+                    except (PermissionError, OSError):
+                        continue
+
+            # Clean any stray .lock files in project root
+            for lock in self._project_root.glob("*.lock"):
+                try:
+                    if lock.is_file() and lock.stat().st_mtime < cutoff:
+                        lock.unlink()
+                except (PermissionError, OSError):
+                    continue
+
+            # Clean stale startup state marker files (from interrupted runs)
+            for state_marker in self._project_root.glob("_corax_state_*"):
+                try:
+                    if state_marker.is_file() and state_marker.stat().st_mtime < cutoff:
+                        state_marker.unlink()
+                except (PermissionError, OSError):
+                    continue
+
+            # Clean stale partial initialization markers
+            partial_init = self._project_root / "_corax_partial_init"
+            if partial_init.exists():
+                try:
+                    if partial_init.stat().st_mtime < cutoff:
+                        partial_init.unlink()
+                except (PermissionError, OSError):
+                    pass
+
+            # Clean stale persistence checkpoint files from interrupted runs
+            persistence_dir = self._project_root / "data" / "persistence"
+            if persistence_dir.exists():
+                for f in persistence_dir.iterdir():
+                    try:
+                        if f.is_file() and f.suffix in (".json", ".jsonl", ".state"):
+                            if f.stat().st_mtime < cutoff:
+                                if "checkpoint" in f.name or "state_" in f.name or "_corax_" in f.name:
+                                    f.unlink()
+                    except (PermissionError, OSError):
+                        continue
+
+            # Clean corrupted state files from persistence
+            corrupt_markers = list(self._project_root.glob("data/persistence/*.corrupted"))
+            for cm in corrupt_markers:
+                try:
+                    cm.unlink()
+                except (PermissionError, OSError):
+                    pass
+
+            # — M41: Validate and clean runtime state consistency markers
+            self._validate_state_consistency_markers(cutoff)
+
+            # — M41: Clean orphaned execution state markers (e.g. stale deploy/exec active markers)
+            self._clean_orphaned_execution_markers(cutoff)
+
+            # — M41: Clean stale session checkpoint files from interrupted agent sessions
+            self._clean_stale_session_checkpoints()
+
+            # — M41: Clean stale event journal files from previous runs
+            self._clean_stale_journal_files(cutoff)
+
+            count = sum(1 for _ in self._project_root.glob("_corax_temp/*") if _.is_file())
+            if count > 0:
+                self._result.repairs_made.append(
+                    f"Cleaned {count} stale temp file(s) from previous run"
+                )
+        except Exception:
+            pass  # Non-critical cleanup, never block bootstrap
+
+    def _clean_orphaned_execution_markers(self, cutoff: float) -> None:
+        """Clean orphaned execution state markers from interrupted agent/deployment sessions.
+        
+        — M41: Prevents stale execution markers from causing consistency errors on restart.
+        """
+        exec_markers = [
+            "_corax_exec_active",
+            "_corax_deploy_active",
+            "_corax_scheduler_active",
+            "_corax_state_dirty",
+            "_corax_session_active",
+        ]
+        for marker_name in exec_markers:
+            marker = self._project_root / marker_name
+            if marker.exists() and marker.is_file():
+                try:
+                    if marker.stat().st_mtime < cutoff:
+                        marker.unlink()
+                        self._result.repairs_made.append(
+                            f"Removed orphaned execution marker: {marker_name}"
+                        )
+                except (PermissionError, OSError):
+                    pass
+
+    def _clean_stale_session_checkpoints(self) -> None:
+        """Clean stale session checkpoint files from interrupted agent sessions.
+        
+        — M41: Bounded cleanup of session checkpoints older than 24 hours.
+        """
+        try:
+            persistence_dir = self._project_root / "data" / "persistence"
+            if not persistence_dir.exists():
+                return
+            now = self._get_current_time()
+            cutoff = now - 86400  # 24 hours
+            count = 0
+            max_cleanup = 20
+            for f in persistence_dir.iterdir():
+                if count >= max_cleanup:
+                    break
+                try:
+                    if f.is_file() and f.suffix == ".checkpoint":
+                        if f.stat().st_mtime < cutoff:
+                            f.unlink()
+                            count += 1
+                except (PermissionError, OSError):
+                    continue
+            if count > 0:
+                self._result.repairs_made.append(
+                    f"Cleaned {count} stale session checkpoint(s)"
+                )
+        except Exception:
+            pass
+
+    def _clean_stale_journal_files(self, cutoff: float) -> None:
+        """Clean stale/oversized journal files from previous runs.
+        
+        — M41: Prevents journal file unbounded growth. Truncates to max 5000 lines.
+        """
+        try:
+            persistence_dir = self._project_root / "data" / "persistence"
+            if not persistence_dir.exists():
+                return
+            for journal_pattern in ["event_journal.jsonl", "error_journal.jsonl", "recovery_journal.jsonl"]:
+                journal_path = persistence_dir / journal_pattern
+                if not journal_path.exists():
+                    continue
+                try:
+                    # Check file size > 1MB, truncate
+                    size = journal_path.stat().st_size
+                    if size > 1_048_576:  # 1MB
+                        with open(journal_path, "r", encoding="utf-8") as f:
+                            lines = f.readlines()
+                        if len(lines) > 5000:
+                            with open(journal_path, "w", encoding="utf-8") as f:
+                                f.writelines(lines[-5000:])
+                            self._result.repairs_made.append(
+                                f"Truncated oversized journal: {journal_pattern} ({size // 1024}KB)"
+                            )
+                except (PermissionError, OSError):
+                    pass
+        except Exception:
+            pass
+
+
+    def _validate_state_consistency_markers(self, cutoff: float) -> None:
+        """Validate and clean runtime state consistency markers.
+
+        Checks for orphaned or corrupted state consistency markers
+        (e.g., _corax_init_phase, _corax_exec_active) and removes
+        stale ones older than cutoff. This prevents stale state from
+        causing consistency issues on restart.
+
+        — M41: Startup state consistency hardening
+        """
+        markers = [
+            "_corax_init_phase",
+            "_corax_exec_active",
+            "_corax_deploy_active",
+            "_corax_state_dirty",
+        ]
+        for marker_name in markers:
+            marker = self._project_root / marker_name
+            if marker.exists():
+                try:
+                    if marker.stat().st_mtime < cutoff:
+                        content = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+                        marker.unlink()
+                        self._result.repairs_made.append(
+                            f"Removed stale state marker: {marker_name} ({content[:50]})"
+                        )
+                except (PermissionError, OSError):
+                    pass
+
+        # — M41: Detect corrupted state marker files (non-empty but unreadable)
+        for marker_name in markers:
+            marker = self._project_root / marker_name
+            if marker.exists() and marker.is_file():
+                try:
+                    _ = marker.stat()
+                    if _.st_size > 0:
+                        # Attempt to read; if fails, it's corrupted
+                        try:
+                            marker.read_bytes()
+                        except (PermissionError, OSError, UnicodeDecodeError):
+                            marker.unlink()
+                            self._result.repairs_made.append(
+                                f"Removed corrupted state marker: {marker_name}"
+                            )
+                except (PermissionError, OSError):
+                    pass
+
+    def create_startup_state_marker(self, phase: str) -> None:
+        """Create a startup initialization phase marker for consistency tracking.
+
+        Args:
+            phase: The initialization phase name (e.g., "bootstrap", "config", "runtime").
+        """
+        try:
+            marker = self._project_root / f"_corax_init_phase"
+            marker.write_text(f"{phase}|{os.getpid()}", encoding="utf-8")
+        except Exception:
+            pass
+
+    def remove_startup_state_marker(self) -> None:
+        """Remove the startup initialization phase marker."""
+        try:
+            marker = self._project_root / "_corax_init_phase"
+            if marker.exists():
+                marker.unlink()
+        except Exception:
+            pass
+
+    def get_previous_init_phase(self) -> Optional[str]:
+        """Get the initialization phase from the previous interrupted run.
+
+        Returns:
+            The phase name if a stale marker was found, None otherwise.
+        """
+        try:
+            marker = self._project_root / "_corax_init_phase"
+            if marker.exists():
+                content = marker.read_text(encoding="utf-8").strip()
+                parts = content.split("|", 1)
+                return parts[0] if parts else None
+            return None
+        except Exception:
+            return None
+
+    def detect_interrupted_shutdown(self) -> bool:
+        """Detect if previous run was interrupted via stale startup lock.
+
+        Returns:
+            True if interrupted shutdown detected, False otherwise.
+        """
+        try:
+            lock_file = self._project_root / "_corax_startup.lock"
+            if lock_file.exists():
+                import time as _time
+                age = _time.time() - lock_file.stat().st_mtime
+                if age > 30:  # Lock older than 30s means previous run crashed
+                    self._result.warnings.append(
+                        f"Detected interrupted shutdown: stale startup lock "
+                        f"({age:.0f}s old)"
+                    )
+                    try:
+                        lock_file.unlink()
+                        self._result.repairs_made.append(
+                            "Cleared stale startup lock"
+                        )
+                    except (PermissionError, OSError):
+                        pass
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def create_startup_lock(self) -> None:
+        """Create startup lock file to detect interrupted shutdowns."""
+        try:
+            lock_file = self._project_root / "_corax_startup.lock"
+            lock_file.write_text(str(os.getpid()), encoding="utf-8")
+        except Exception:
+            pass  # Non-critical, cleanup handled on next boot
+
+    def remove_startup_lock(self) -> None:
+        """Remove startup lock file on clean shutdown."""
+        try:
+            lock_file = self._project_root / "_corax_startup.lock"
+            if lock_file.exists():
+                lock_file.unlink()
+        except Exception:
+            pass
+
     def validate_environment(self) -> Dict[str, Any]:
+
         """Quick environment validation (non-repairing)."""
         result = {
             "success": True,
