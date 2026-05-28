@@ -18,8 +18,10 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 import textwrap
 import traceback
+import warnings
 from pathlib import Path
 
 
@@ -231,6 +233,11 @@ class StartupDiagnostics:
     """
 
     def __init__(self, log_dir: Optional[str] = None):
+        # Suppress startup warnings in frozen/executable mode
+        if _is_frozen():
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            warnings.filterwarnings("ignore", category=ImportWarning)
+
         self._report = DiagnosticReport()
         self._report.frozen_detected = _is_frozen()
         self._log_dir = log_dir or os.path.join(
@@ -404,14 +411,23 @@ class StartupDiagnostics:
                 ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 filename = f"startup_diagnostics_{ts}.json"
 
-            filepath = os.path.join(self._log_dir, filename)
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(self._report.to_json())
+            # Attempt primary log dir
+            try:
+                filepath = os.path.join(self._log_dir, filename)
+                os.makedirs(self._log_dir, exist_ok=True)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(self._report.to_json())
+            except Exception:
+                # Fallback to temp directory
+                temp_dir = tempfile.mkdtemp(prefix="corax_report_")
+                filepath = os.path.join(temp_dir, filename)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(self._report.to_json())
 
             # Also save markdown version
             try:
                 md_filename = filename.replace(".json", ".md")
-                md_filepath = os.path.join(self._log_dir, md_filename)
+                md_filepath = os.path.join(os.path.dirname(filepath), md_filename)
                 with open(md_filepath, "w", encoding="utf-8") as f:
                     f.write(self._report.to_markdown())
             except Exception:
@@ -440,5 +456,3 @@ class StartupDiagnostics:
         except Exception:
             return DiagnosticReport(success=False, errors=[{"phase": "load", "message": f"Failed to load report from {filepath}"}])
 
-
-import tempfile
