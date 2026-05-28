@@ -64,6 +64,7 @@ class KernelResult:
     initialized_components: List[str] = field(default_factory=list)
     failed_components: List[str] = field(default_factory=list)
     shutdown_clean: bool = False
+    restart_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -78,6 +79,7 @@ class KernelResult:
             "initialized_components": self.initialized_components,
             "failed_components": self.failed_components,
             "shutdown_clean": self.shutdown_clean,
+            "restart_count": self.restart_count,
         }
 
 
@@ -114,6 +116,10 @@ class CoraxRuntimeKernel:
         self._start_time = datetime.now(timezone.utc)
         self._shutdown_hooks: List[Callable[[], None]] = []
         self._shutdown_initiated = False
+        self._restart_count = 0
+
+        # M41: Phase attempt tracking to bound retries
+        self._phase_attempts: Dict[str, int] = {}
 
         # Bridge connection
         runtime_bridge.bind_kernel(self)
@@ -191,6 +197,11 @@ class CoraxRuntimeKernel:
         """Get the runtime bridge."""
         return runtime_bridge
 
+    @property
+    def restart_count(self) -> int:
+        """Get the number of restarts (startup cycles)."""
+        return self._restart_count
+
     # ─── Public API ──────────────────────────────────────────────────────
 
     def start(self) -> KernelResult:
@@ -200,11 +211,30 @@ class CoraxRuntimeKernel:
         Runs all startup phases in deterministic order with self-healing
         and comprehensive diagnostics. Pushes live state to the GUI bridge.
 
+        Survivability (M41):
+        - Startup state validation guards prevent re-entry
+        - Bounded bootstrap retry (max 3 attempts per phase)
+        - Stale startup-state cleanup before initialization
+        - Interrupted startup recovery via lock detection
+        - Deterministic sequencing with no recovery loops
+
         Returns:
             KernelResult with full startup diagnostics.
         """
         result = KernelResult()
         runtime_bridge.push_health_status("runtime", "Starting")
+
+        # ── M41: Startup state validation guards ───────────────────────
+        # Prevent re-entering startup if already initialized
+        if self._state_machine.is_ready:
+            result.warnings.append("Startup already completed, skipping re-entry")
+            result.success = True
+            return result
+
+        # Prevent startup if currently shutting down
+        if self._shutdown_initiated:
+            result.errors.append("Cannot start: shutdown already initiated")
+            return result
 
         # Start RuntimeStateBus for event-driven convergence
         try:
@@ -213,9 +243,20 @@ class CoraxRuntimeKernel:
         except Exception:
             pass
 
-        try:
+        # ── M41: Lock file survivability check ────────────────────
+        # Validate no stale startup lock before proceeding
+        stale_lock = self._bootstrap.detect_interrupted_shutdown()
+        if stale_lock:
+            result.warnings.append(
+                "Stale startup lock detected and cleared before initialization"
+            )
+            self._diagnostics.record_recovery("Stale startup lock cleared pre-init")
 
-            # Phase 1: Bootstrap
+        try:
+            # ── M41: Safe bootstrap retry behavior ─────────────────────
+            # Track max attempts per phase to prevent infinite recovery loops
+
+            # Phase 1: Bootstrap (with startup-state hardening)
             self._run_bootstrap_phase(result)
 
             # Phase 2: Validate environment
@@ -226,11 +267,11 @@ class CoraxRuntimeKernel:
             if self._state_machine.is_running:
                 self._run_validate_runtime_phase(result)
 
-            # Phase 4: Repair runtime (if validation failed)
+            # Phase 4: Repair runtime (if validation failed, bounded retry)
             if self._state_machine.has_failed:
                 self._run_repair_runtime_phase(result)
 
-            # Phase 5: Load config
+            # Phase 5: Load config (survivable: can continue without config)
             if self._state_machine.is_running:
                 self._run_load_config_phase(result)
 
@@ -261,6 +302,17 @@ class CoraxRuntimeKernel:
             # Phase 12: Ready
             if self._state_machine.is_running:
                 self._finalize_ready(result)
+
+            # ── M41: Partial initialization fallback ───────────────────
+            # If not all components initialized but kernel is running,
+            # still mark as partially successful (degraded startup)
+            if not result.success and not self._state_machine.has_failed:
+                initialized = self._state_machine.get_summary().get("initialized_components", [])
+                if initialized:
+                    result.warnings.append(
+                        f"Partial startup: {len(initialized)} components initialized"
+                    )
+                    result.success = True  # Degraded but operational
 
         except Exception as e:
             self._state_machine.transition_to(StartupState.FATAL)
@@ -298,9 +350,6 @@ class CoraxRuntimeKernel:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     asyncio.ensure_future(runtime_bridge.start_bridge_loop())
-                else:
-                    # Will be started later when loop is available
-                    pass
             except RuntimeError:
                 pass
 
@@ -323,14 +372,13 @@ class CoraxRuntimeKernel:
         # Stop the bridge
         runtime_bridge.stop_bridge()
 
-        # Stop RuntimeStateBus
+        # Stop RuntimeStateBus (with bounded cleanup)
         try:
             state_bus.stop()
         except Exception:
             pass
 
         try:
-
             # Run shutdown hooks in reverse order
             for hook in reversed(self._shutdown_hooks):
                 try:
@@ -360,11 +408,60 @@ class CoraxRuntimeKernel:
     # ─── Phase Implementations ───────────────────────────────────────────
 
     def _run_bootstrap_phase(self, result: KernelResult) -> None:
-        """Phase 1: Bootstrap runtime environment."""
+        """Phase 1: Bootstrap runtime environment with startup-state hardening."""
         self._state_machine.transition_to(StartupState.BOOTSTRAPPING)
         self._state_machine.start_phase(RuntimePhase.BOOTSTRAP)
         self._diagnostics.start_phase("bootstrap")
 
+        # ── M41: Bounded retry guard ───────────────────────────────────
+        phase_name = "bootstrap"
+        self._phase_attempts[phase_name] = self._phase_attempts.get(phase_name, 0)
+        if self._phase_attempts[phase_name] >= 3:
+            self._diagnostics.record_recovery(
+                "Bootstrap retry exhausted, skipping bootstrap phase"
+            )
+            result.warnings.append("Bootstrap retry exhausted (max 3)")
+            return
+        self._phase_attempts[phase_name] += 1
+
+        # ── Startup-state consistency hardening (M41) ──────────────────
+        # 1. Detect corrupted startup-state from previous interrupted run
+        corrupted_state = self._bootstrap.get_previous_init_phase()
+        if corrupted_state:
+            self._diagnostics.record_recovery(
+                f"Detected corrupted startup state from phase: {corrupted_state}"
+            )
+            result.warnings.append(
+                f"Previous startup interrupted during '{corrupted_state}' phase; "
+                f"stale state discarded"
+            )
+
+        # 2. Detect interrupted shutdown from previous run
+        interrupted = self._bootstrap.detect_interrupted_shutdown()
+        if interrupted:
+            self._diagnostics.record_recovery(
+                "Interrupted shutdown detected, cleaning stale state"
+            )
+            result.warnings.append("Previous run was interrupted; stale state cleaned")
+
+        # 3. Clean stale temp, lock, partial-init marker, persistence state files
+        self._bootstrap.cleanup_stale_temp()
+
+        # 4. Create startup lock for THIS run
+        self._bootstrap.create_startup_lock()
+
+        # 5. Create startup state marker for consistency tracking
+        self._bootstrap.create_startup_state_marker("bootstrap")
+
+        # 6. Register shutdown hook to remove lock and marker on clean exit
+        self.register_shutdown_hook(
+            lambda: self._bootstrap.remove_startup_lock()
+        )
+        self.register_shutdown_hook(
+            lambda: self._bootstrap.remove_startup_state_marker()
+        )
+
+        # ── Run bootstrap validation ───────────────────────────────────
         bootstrap_result = self._bootstrap.run()
         result.bootstrap_result = bootstrap_result.to_dict()
 
@@ -375,6 +472,9 @@ class CoraxRuntimeKernel:
                 success=True,
             )
             self._diagnostics.end_phase("bootstrap", "success")
+            for repair in bootstrap_result.repairs_made:
+                result.warnings.append(f"Bootstrap repair: {repair}")
+                self._diagnostics.record_recovery(repair)
         else:
             error_msg = "Bootstrap failed"
             self._state_machine.end_phase(
@@ -387,7 +487,9 @@ class CoraxRuntimeKernel:
             self._diagnostics.end_phase(
                 "bootstrap", "failed", errors=[error_msg]
             )
-            self._diagnostics.record_recovery("Bootstrap failed, attempting self-repair")
+            self._diagnostics.record_recovery(
+                "Bootstrap failed, attempting self-repair"
+            )
 
     def _run_validate_environment_phase(
         self, result: KernelResult
@@ -419,7 +521,6 @@ class CoraxRuntimeKernel:
             self._diagnostics.end_phase(
                 "validate_environment", "failed", errors=errors
             )
-            result.success = False
 
     def _run_validate_runtime_phase(self, result: KernelResult) -> None:
         """Phase 3: Validate runtime dependencies and modules."""
@@ -453,16 +554,34 @@ class CoraxRuntimeKernel:
             self._diagnostics.end_phase(
                 "validate_runtime", "failed", errors=[error_msg]
             )
-            result.success = False
 
     def _run_repair_runtime_phase(self, result: KernelResult) -> None:
         """Phase 4: Repair runtime issues."""
         runtime_bridge.push_recovery_activity(
-            "kernel", "self_repair", "running", "Attempting runtime self-repair"
+            "kernel", "self_repair", "running",
+            "Attempting runtime self-repair"
         )
         self._state_machine.transition_to(StartupState.SELF_REPAIRING)
         self._state_machine.start_phase(RuntimePhase.SELF_REPAIR)
         self._diagnostics.start_phase("repair_runtime")
+
+        # ── M41: Bounded repair retry guard ────────────────────────────
+        phase_name = "repair"
+        self._phase_attempts[phase_name] = self._phase_attempts.get(phase_name, 0)
+        if self._phase_attempts[phase_name] >= 2:
+            result.warnings.append("Repair retry exhausted (max 2), proceeding degraded")
+            self._state_machine.end_phase(
+                RuntimePhase.SELF_REPAIR,
+                StartupState.SELF_REPAIR_FAILED,
+                success=False,
+                error="Repair retries exhausted",
+            )
+            runtime_bridge.push_recovery_activity(
+                "kernel", "self_repair", "exhausted",
+                "Repair retries exhausted, proceeding degraded"
+            )
+            return
+        self._phase_attempts[phase_name] += 1
 
         recovery_result = self._recovery.repair_all()
         result.recovery_result = recovery_result.to_dict()
@@ -475,9 +594,9 @@ class CoraxRuntimeKernel:
             )
             self._state_machine.mark_component_initialized("self_repair")
             self._diagnostics.end_phase("repair_runtime", "success")
-            result.success = True
             runtime_bridge.push_recovery_activity(
-                "kernel", "self_repair", "completed", "Runtime self-repair succeeded"
+                "kernel", "self_repair", "completed",
+                "Runtime self-repair succeeded"
             )
         else:
             self._state_machine.end_phase(
@@ -490,7 +609,6 @@ class CoraxRuntimeKernel:
             self._diagnostics.end_phase(
                 "repair_runtime", "failed", errors=recovery_result.errors
             )
-            result.success = False
             runtime_bridge.push_recovery_activity(
                 "kernel", "self_repair", "failed",
                 "Self-repair could not resolve all issues"
@@ -502,8 +620,13 @@ class CoraxRuntimeKernel:
         self._state_machine.start_phase(RuntimePhase.LOAD_CONFIG)
         self._diagnostics.start_phase("load_config")
 
+        # Update startup state marker
+        self._bootstrap.create_startup_state_marker("load_config")
+
         try:
             sys.path.insert(0, str(self._project_root))
+
+            # Survivability: validate config module import
             from src.core.config import load_config
 
             config_path = self._project_root / "config" / "corax.yaml"
@@ -536,6 +659,9 @@ class CoraxRuntimeKernel:
         self._state_machine.start_phase(RuntimePhase.INIT_LOGGING)
         self._diagnostics.start_phase("init_logging")
 
+        # Update startup state marker
+        self._bootstrap.create_startup_state_marker("init_logging")
+
         try:
             sys.path.insert(0, str(self._project_root))
             from src.core.logging import setup_logging
@@ -566,6 +692,9 @@ class CoraxRuntimeKernel:
         self._state_machine.transition_to(StartupState.INIT_STATE)
         self._state_machine.start_phase(RuntimePhase.INIT_STATE)
         self._diagnostics.start_phase("init_state")
+
+        # Update startup state marker
+        self._bootstrap.create_startup_state_marker("init_state")
 
         try:
             dirs = [
@@ -604,6 +733,9 @@ class CoraxRuntimeKernel:
         self._state_machine.start_phase(RuntimePhase.INIT_EXECUTION)
         self._diagnostics.start_phase("init_execution")
 
+        # Update startup state marker
+        self._bootstrap.create_startup_state_marker("init_execution")
+
         try:
             sys.path.insert(0, str(self._project_root))
             from src.deployment.execution.executor import DeploymentExecutor
@@ -636,6 +768,9 @@ class CoraxRuntimeKernel:
         self._state_machine.start_phase(RuntimePhase.INIT_DEPLOYMENT)
         self._diagnostics.start_phase("init_deployment")
 
+        # Update startup state marker
+        self._bootstrap.create_startup_state_marker("init_deployment")
+
         try:
             sys.path.insert(0, str(self._project_root))
             from src.deployment.orchestrator import DeploymentOrchestrator
@@ -644,11 +779,12 @@ class CoraxRuntimeKernel:
             self._deployment_engine = DeploymentOrchestrator()
             runtime_bridge.bind_deployment_orchestrator(self._deployment_engine)
 
-            # CRITICAL: Wire the orchestrator to the autonomous deployer
-            # so install_tool() and pull_model() actually execute real installers
+            # Wire orchestrator to autonomous deployer
             autonomous_deployer.set_orchestrator(self._deployment_engine)
             import logging as _logging
-            _logging.getLogger(__name__).info("Deployment orchestrator wired to autonomous deployer")
+            _logging.getLogger(__name__).info(
+                "Deployment orchestrator wired to autonomous deployer"
+            )
 
             self._state_machine.end_phase(
                 RuntimePhase.INIT_DEPLOYMENT,
@@ -675,6 +811,9 @@ class CoraxRuntimeKernel:
         self._state_machine.transition_to(StartupState.INIT_AI_STACK)
         self._state_machine.start_phase(RuntimePhase.INIT_AI_STACK)
         self._diagnostics.start_phase("init_ai_stack")
+
+        # Update startup state marker
+        self._bootstrap.create_startup_state_marker("init_ai_stack")
 
         try:
             sys.path.insert(0, str(self._project_root))
@@ -707,6 +846,9 @@ class CoraxRuntimeKernel:
         self._state_machine.start_phase(RuntimePhase.INIT_REPORTING)
         self._diagnostics.start_phase("init_reporting")
 
+        # Update startup state marker
+        self._bootstrap.create_startup_state_marker("init_reporting")
+
         try:
             sys.path.insert(0, str(self._project_root))
             from src.modules.reporting import ReportingEngine
@@ -733,7 +875,7 @@ class CoraxRuntimeKernel:
             )
 
     def _finalize_ready(self, result: KernelResult) -> None:
-        """Finalize: Mark runtime as ready."""
+        """Finalize: Mark runtime as ready with cleanup."""
         self._state_machine.transition_to(StartupState.READY)
         self._state_machine.end_phase(
             RuntimePhase.READY,
@@ -742,6 +884,9 @@ class CoraxRuntimeKernel:
         )
         self._state_machine.mark_component_initialized("ready")
         result.success = True
+
+        # Remove startup state marker on clean completion
+        self._bootstrap.remove_startup_state_marker()
 
     # ─── Signal Handling ─────────────────────────────────────────────────
 

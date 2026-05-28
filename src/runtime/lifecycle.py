@@ -11,6 +11,7 @@ the old RuntimeLifecycle API for existing consumers.
 Survivability: _MEIPASS safe, graceful degradation under frozen execution.
 """
 
+import sys
 import warnings
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
@@ -21,9 +22,6 @@ from pathlib import Path
 def _is_frozen() -> bool:
     """Detect if running as a PyInstaller executable."""
     return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
-
-
-import sys
 
 
 @dataclass
