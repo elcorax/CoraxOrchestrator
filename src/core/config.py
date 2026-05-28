@@ -16,12 +16,30 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 from copy import deepcopy
 
-import yaml
+try:
+    import yaml
+    _HAS_YAML = True
+except ImportError:
+    _HAS_YAML = False
 
 from src.core.exceptions import ConfigurationError
-from src.core.logging import get_logger
 
-logger = get_logger(__name__)
+# Lazy logger - only imported when needed to avoid circular imports
+# at module level before logging is initialized
+_logger = None
+
+
+def _get_logger():
+    global _logger
+    if _logger is None:
+        try:
+            from src.core.logging import get_logger
+            _logger = get_logger(__name__)
+        except Exception:
+            import logging
+            _logger = logging.getLogger(__name__)
+    return _logger
+
 
 # Type for nested configuration dictionaries
 ConfigDict = Dict[str, Any]
@@ -205,7 +223,7 @@ class ConfigManager:
             loaded = self._load_file(project_config)
             config = self._deep_merge(config, loaded)
             self._loaded_files.append(project_config)
-            logger.info("Loaded project config", path=str(project_config))
+            _get_logger().info("Loaded project config", path=str(project_config))
 
         # 3. Load user config file
         user_config = Path.home() / ".corax" / "config.yaml"
@@ -213,7 +231,7 @@ class ConfigManager:
             loaded = self._load_file(user_config)
             config = self._deep_merge(config, loaded)
             self._loaded_files.append(user_config)
-            logger.info("Loaded user config", path=str(user_config))
+            _get_logger().info("Loaded user config", path=str(user_config))
 
         # 4. Apply environment variable overrides
         config = self._apply_env_overrides(config)
@@ -222,10 +240,10 @@ class ConfigManager:
         errors = self.schema.validate(config)
         if errors:
             for error in errors:
-                logger.warning("Config validation warning", error=error)
+                _get_logger().warning("Config validation warning", error=error)
 
         self._config = config
-        logger.info(
+        _get_logger().info(
             "Configuration loaded",
             sources=[str(p) for p in self._loaded_files],
         )
@@ -233,7 +251,7 @@ class ConfigManager:
 
     def reload(self) -> ConfigDict:
         """Reload configuration from disk."""
-        logger.info("Reloading configuration")
+        _get_logger().info("Reloading configuration")
         return self.load()
 
     def get(
@@ -282,13 +300,24 @@ class ConfigManager:
 
     def save(self, path: Optional[Path] = None) -> None:
         """Save current configuration to a file."""
+        if not _HAS_YAML:
+            _get_logger().warning(
+                "PyYAML not installed, saving as JSON instead"
+            )
+            save_path = path or (self.config_dir / "corax.json")
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(save_path, "w") as f:
+                json.dump(self._config, f, indent=2, default=str)
+            _get_logger().info("Configuration saved (JSON fallback)", path=str(save_path))
+            return
+
         save_path = path or (self.config_dir / "corax.yaml")
         save_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(save_path, "w") as f:
             yaml.dump(self._config, f, default_flow_style=False, sort_keys=False)
 
-        logger.info("Configuration saved", path=str(save_path))
+        _get_logger().info("Configuration saved", path=str(save_path))
 
     def _load_file(self, path: Path) -> ConfigDict:
         """Load a configuration file (YAML or JSON)."""
@@ -296,11 +325,26 @@ class ConfigManager:
         try:
             with open(path, "r") as f:
                 if suffix in (".yaml", ".yml"):
-                    return yaml.safe_load(f) or {}
+                    if _HAS_YAML:
+                        return yaml.safe_load(f) or {}
+                    else:
+                        # Fallback: try to parse as JSON if YAML not available
+                        _get_logger().warning(
+                            "PyYAML not installed, attempting JSON fallback for YAML file",
+                            path=str(path),
+                        )
+                        try:
+                            return json.load(f)
+                        except json.JSONDecodeError:
+                            _get_logger().warning(
+                                "Cannot load YAML file without PyYAML",
+                                path=str(path),
+                            )
+                            return {}
                 elif suffix == ".json":
                     return json.load(f)
                 else:
-                    logger.warning(
+                    _get_logger().warning(
                         "Unsupported config format", path=str(path), suffix=suffix
                     )
                     return {}

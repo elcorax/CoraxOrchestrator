@@ -20,9 +20,15 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from uuid import uuid4
 
-import structlog
-from structlog.processors import JSONRenderer, TimeStamper
-from structlog.types import EventDict, Processor
+try:
+    import structlog
+    from structlog.processors import JSONRenderer, TimeStamper
+    from structlog.types import EventDict, Processor
+    _HAS_STRUCTLOG = True
+except ImportError:
+    _HAS_STRUCTLOG = False
+    EventDict = Dict[str, Any]  # type: ignore
+    Processor = Any  # type: ignore
 
 # Module-level correlation ID context
 _correlation_id: Optional[str] = None
@@ -41,8 +47,8 @@ def get_correlation_id() -> Optional[str]:
 
 
 def _add_correlation_id(
-    logger: logging.Logger, method_name: str, event_dict: EventDict
-) -> EventDict:
+    logger: logging.Logger, method_name: str, event_dict: Dict[str, Any]
+) -> Dict[str, Any]:
     """Processor that adds correlation ID to log events."""
     cid = get_correlation_id()
     if cid:
@@ -51,15 +57,15 @@ def _add_correlation_id(
 
 
 def _drop_debug_if_needed(
-    logger: logging.Logger, method_name: str, event_dict: EventDict
-) -> EventDict:
+    logger: logging.Logger, method_name: str, event_dict: Dict[str, Any]
+) -> Dict[str, Any]:
     """Drop debug messages if not in debug mode."""
     return event_dict
 
 
 def _rename_event_to_message(
-    logger: logging.Logger, method_name: str, event_dict: EventDict
-) -> EventDict:
+    logger: logging.Logger, method_name: str, event_dict: Dict[str, Any]
+) -> Dict[str, Any]:
     """Rename 'event' key to 'message' for log aggregation compatibility."""
     if "event" in event_dict:
         event_dict["message"] = event_dict.pop("event")
@@ -67,8 +73,8 @@ def _rename_event_to_message(
 
 
 def _format_exc_info(
-    logger: logging.Logger, method_name: str, event_dict: EventDict
-) -> EventDict:
+    logger: logging.Logger, method_name: str, event_dict: Dict[str, Any]
+) -> Dict[str, Any]:
     """Format exception info for structured logging."""
     if "exc_info" in event_dict and event_dict["exc_info"]:
         import traceback
@@ -90,6 +96,7 @@ class LogManager:
 
     Configures structured logging with both console and file outputs.
     Supports log rotation, correlation IDs, and module-level filtering.
+    When structlog is unavailable, falls back to standard logging.
     """
 
     def __init__(
@@ -115,26 +122,27 @@ class LogManager:
         # Ensure log directory exists
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-        # Configure structlog
-        processors: list[Processor] = [
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.PositionalArgumentsFormatter(),
-            TimeStamper(fmt="iso", utc=True),
-            _add_correlation_id,
-            _rename_event_to_message,
-            _format_exc_info,
-            structlog.processors.StackInfoRenderer(),
-            structlog.dev.ConsoleRenderer()
-            if not self.json_output
-            else JSONRenderer(),
-        ]
+        # Configure structlog if available
+        if _HAS_STRUCTLOG:
+            processors: list = [
+                structlog.stdlib.add_log_level,
+                structlog.stdlib.PositionalArgumentsFormatter(),
+                TimeStamper(fmt="iso", utc=True),
+                _add_correlation_id,
+                _rename_event_to_message,
+                _format_exc_info,
+                structlog.processors.StackInfoRenderer(),
+                structlog.dev.ConsoleRenderer()
+                if not self.json_output
+                else JSONRenderer(),
+            ]
 
-        structlog.configure(
-            processors=processors,
-            context_class=dict,
-            logger_factory=structlog.stdlib.LoggerFactory(),
-            cache_logger_on_first_use=True,
-        )
+            structlog.configure(
+                processors=processors,
+                context_class=dict,
+                logger_factory=structlog.stdlib.LoggerFactory(),
+                cache_logger_on_first_use=True,
+            )
 
         # Configure root logger
         root_logger = logging.getLogger()
@@ -223,7 +231,7 @@ def setup_logging(
     manager.initialize()
 
 
-def get_logger(name: str = __name__) -> structlog.stdlib.BoundLogger:
+def get_logger(name: str = __name__) -> Any:
     """
     Get a structured logger instance.
 
@@ -231,6 +239,9 @@ def get_logger(name: str = __name__) -> structlog.stdlib.BoundLogger:
         name: The logger name, typically __name__
 
     Returns:
-        A configured structlog BoundLogger
+        A configured structlog BoundLogger, or standard logger fallback
     """
-    return structlog.get_logger(name)
+    if _HAS_STRUCTLOG:
+        return structlog.get_logger(name)
+    logger = logging.getLogger(name)
+    return logger
