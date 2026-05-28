@@ -98,12 +98,12 @@ class AlphaSmokeSuite:
         start = time.time()
 
         try:
-            from src.runtime.bootstrap import RuntimeBootstrap
+            from src.runtime.bootstrap import BootstrapRuntime
             check.passed = True
             check.duration_ms = (time.time() - start) * 1000
             check.details = {
                 "import_success": True,
-                "class_name": "RuntimeBootstrap",
+                "class_name": "BootstrapRuntime",
             }
         except ImportError as e:
             check.duration_ms = (time.time() - start) * 1000

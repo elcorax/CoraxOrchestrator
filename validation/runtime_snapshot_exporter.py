@@ -175,22 +175,31 @@ class RuntimeSnapshotExporter:
                 "python_compiler": plat.python_compiler(),
             }
 
-            # Try psutil for extended info
+            # Try optional psutil for extended info
             try:
-                import psutil
-                system_snapshot["cpu_count"] = psutil.cpu_count()
-                system_snapshot["cpu_percent"] = psutil.cpu_percent(interval=0.1)
-                system_snapshot["memory_total_gb"] = round(
-                    psutil.virtual_memory().total / (1024**3), 2
-                )
-                system_snapshot["memory_available_gb"] = round(
-                    psutil.virtual_memory().available / (1024**3), 2
-                )
-                system_snapshot["memory_percent"] = psutil.virtual_memory().percent
-                system_snapshot["disk_usage_gb"] = round(
-                    psutil.disk_usage("/").used / (1024**3), 2
-                ) if sys.platform != "win32" else "N/A (Windows)"
-            except ImportError:
+                import importlib.util
+                import importlib
+
+                psutil_spec = importlib.util.find_spec("psutil")
+                if psutil_spec is not None:
+                    psutil = importlib.import_module("psutil")
+                    system_snapshot["psutil_available"] = True
+                    system_snapshot["cpu_count"] = psutil.cpu_count()
+                    system_snapshot["cpu_percent"] = psutil.cpu_percent(interval=0.1)
+                    vm = psutil.virtual_memory()
+                    system_snapshot["memory_total_gb"] = round(
+                        vm.total / (1024**3), 2
+                    )
+                    system_snapshot["memory_available_gb"] = round(
+                        vm.available / (1024**3), 2
+                    )
+                    system_snapshot["memory_percent"] = vm.percent
+                    system_snapshot["disk_usage_gb"] = round(
+                        psutil.disk_usage("/").used / (1024**3), 2
+                    ) if sys.platform != "win32" else "N/A (Windows)"
+                else:
+                    system_snapshot["psutil_available"] = False
+            except Exception:
                 system_snapshot["psutil_available"] = False
 
             snap_path = self._output_dir / f"system_snapshot_{int(time.time())}.json"

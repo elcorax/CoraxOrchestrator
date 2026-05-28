@@ -189,7 +189,7 @@ def run_stage_h5():
 
     # H5.4: Stale-state accumulation detection
     print_subheader("H5.4: Stale-State Accumulation Detection")
-    from src.runtime.state import StartupStateMachine, RuntimePhase
+    from src.runtime.state import StartupStateMachine, RuntimePhase, StartupState
 
     for stale_cycle in range(3):
         try:

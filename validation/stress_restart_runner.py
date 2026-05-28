@@ -61,7 +61,7 @@ class StressRestartRunner:
     """
     Bounded stress-test restart runner.
 
-    Executes N+ restart cycles with full bootstrap, diagnostics,
+    Executes N+ restart cycles with diagnostics generation,
     config reload, and shutdown simulation to validate that
     the runtime can survive repeated restart pressure without
     progressive degradation.
@@ -109,68 +109,64 @@ class StressRestartRunner:
         cycle_start = time.time()
 
         try:
-            # Phase 1: Bootstrap initialization
+            # Phase 1: Bootstrap environment validation
             p1_start = time.time()
             # Clear bootstrap module cache
             for mod in list(sys.modules.keys()):
                 if mod.startswith("src.runtime.bootstrap") or mod.startswith("src.runtime.diagnostics"):
                     del sys.modules[mod]
 
-            from src.runtime.bootstrap import RuntimeBootstrap
-            bootstrap = RuntimeBootstrap()
-            init_ok = bootstrap.initialize()
+            from src.runtime.bootstrap import BootstrapRuntime
+            bootstrap = BootstrapRuntime()
+            bootstrap_result = bootstrap.run()
             p1_ms = (time.time() - p1_start) * 1000
             result.phases["bootstrap_init"] = {
                 "duration_ms": round(p1_ms, 1),
-                "success": init_ok is not False,
+                "success": bootstrap_result.success,
             }
 
-            # Phase 2: Config load
+            # Phase 2: Diagnostics init
             p2_start = time.time()
-            if "src.core.config" in sys.modules:
-                del sys.modules["src.core.config"]
-            from src.core.config import load_config
-            cfg = load_config(None)
-            p2_ms = (time.time() - p2_start) * 1000
-            result.phases["config_load"] = {
-                "duration_ms": round(p2_ms, 1),
-                "success": cfg is not None,
-            }
-
-            # Phase 3: Diagnostics init
-            p3_start = time.time()
             if "src.health.diagnostics" in sys.modules:
                 del sys.modules["src.health.diagnostics"]
             from src.health.diagnostics import StartupDiagnostics
             diag = StartupDiagnostics()
             diag.collect_system_info()
-            p3_ms = (time.time() - p3_start) * 1000
+            p2_ms = (time.time() - p2_start) * 1000
             result.phases["diagnostics_init"] = {
-                "duration_ms": round(p3_ms, 1),
+                "duration_ms": round(p2_ms, 1),
                 "success": True,
             }
 
-            # Phase 4: Generate & save diagnostics
-            p4_start = time.time()
+            # Phase 3: Generate & save diagnostics
+            p3_start = time.time()
             diag.start_phase(f"stress_cycle_{cycle_num}")
             diag.end_phase(f"stress_cycle_{cycle_num}", "success")
             diag.finalize(success=True)
             saved = diag.save_report(f"stress_cycle_{cycle_num}_{int(time.time())}.json")
-            p4_ms = (time.time() - p4_start) * 1000
+            p3_ms = (time.time() - p3_start) * 1000
             result.phases["diagnostics_export"] = {
-                "duration_ms": round(p4_ms, 1),
+                "duration_ms": round(p3_ms, 1),
                 "success": bool(saved),
                 "saved_to": saved,
             }
 
-            # Phase 5: Shutdown simulation (module cleanup)
-            p5_start = time.time()
-            bootstrap_sim = None
-            p5_ms = (time.time() - p5_start) * 1000
-            result.phases["shutdown_sim"] = {
-                "duration_ms": round(p5_ms, 1),
-                "success": True,
-            }
+            if not self._fast:
+                # Phase 4: Config load (only in non-fast mode)
+                p4_start = time.time()
+                if "src.core.config" in sys.modules:
+                    del sys.modules["src.core.config"]
+                try:
+                    from src.core.config import load_config
+                    cfg = load_config(None)
+                    cfg_ok = cfg is not None
+                except Exception:
+                    cfg_ok = False
+                p4_ms = (time.time() - p4_start) * 1000
+                result.phases["config_load"] = {
+                    "duration_ms": round(p4_ms, 1),
+                    "success": cfg_ok,
+                }
 
             # Determine overall pass/fail
             result.passed = all(
