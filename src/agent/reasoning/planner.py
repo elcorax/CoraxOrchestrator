@@ -8,12 +8,61 @@ with dependency resolution and resource allocation.
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class ValidationSeverity(Enum):
+    """Severity of a validation issue."""
+    ERROR = "error"
+    WARNING = "warning"
+
+
+@dataclass
+class ValidationError:
+    """
+    A validation error found during plan validation.
+
+    Describes structural issues in a plan before execution.
+    """
+    code: str
+    message: str
+    severity: ValidationSeverity
+    step_id: Optional[str] = None
+    related_step_ids: Optional[List[str]] = None
+    details: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "severity": self.severity.value,
+            "step_id": self.step_id,
+            "related_step_ids": self.related_step_ids,
+            "details": self.details,
+        }
+
+
+@dataclass
+class PlanValidationResult:
+    """
+    Result of plan validation.
+
+    Contains any errors or warnings detected during structural
+    validation of a plan before execution.
+    """
+    is_valid: bool
+    errors: List[ValidationError] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "is_valid": self.is_valid,
+            "errors": [e.to_dict() for e in self.errors],
+        }
 
 
 class PlanStepStatus(Enum):
@@ -364,4 +413,121 @@ class Planner:
                 "generated": "custom",
                 "context": context,
             },
+        )
+
+    def validate_plan(self, plan: Plan) -> PlanValidationResult:
+        """
+        Validate a plan for structural issues before execution.
+
+        Detects:
+        - Circular dependencies (A -> B -> A)
+        - Recursive execution chains (self-referencing steps)
+        - Orphan steps (depend on non-existent steps)
+        - Missing step IDs referenced in depends_on
+
+        Args:
+            plan: The plan to validate
+
+        Returns:
+            PlanValidationResult with any errors detected
+        """
+        errors: List[ValidationError] = []
+        step_ids: Set[str] = {s.step_id for s in plan.steps}
+
+        # Build dependency graph adjacency list
+        graph: Dict[str, List[str]] = {}
+        for step in plan.steps:
+            graph[step.step_id] = list(step.depends_on)
+
+        # 1. Detect orphan dependencies (non-existent step references)
+        for step in plan.steps:
+            for dep_id in step.depends_on:
+                if dep_id not in step_ids:
+                    errors.append(ValidationError(
+                        code="ORPHAN_DEPENDENCY",
+                        message=(
+                            f"Step '{step.step_id}' depends on non-existent "
+                            f"step '{dep_id}'"
+                        ),
+                        severity=ValidationSeverity.ERROR,
+                        step_id=step.step_id,
+                        related_step_ids=[dep_id],
+                        details={
+                            "depends_on": dep_id,
+                            "valid_step_ids": sorted(step_ids),
+                        },
+                    ))
+
+        # 2. Detect recursive (self-referencing) chains
+        for step in plan.steps:
+            if step.step_id in step.depends_on:
+                errors.append(ValidationError(
+                    code="SELF_REFERENCING_DEPENDENCY",
+                    message=(
+                        f"Step '{step.step_id}' depends on itself, "
+                        f"creating a recursive execution chain"
+                    ),
+                    severity=ValidationSeverity.ERROR,
+                    step_id=step.step_id,
+                    related_step_ids=[step.step_id],
+                ))
+
+        # 3. Detect circular dependencies using DFS (Tarjan-style)
+        visited: Set[str] = set()
+        recursion_stack: Set[str] = set()
+        cycle_path: Dict[str, List[str]] = {}
+
+        def _dfs(node: str, path: List[str]) -> None:
+            """DFS traversal recording any cycles found."""
+            if node in recursion_stack:
+                # Cycle detected - reconstruct the cycle path
+                cycle_start_idx = path.index(node)
+                cycle = path[cycle_start_idx:] + [node]
+                cycle_path[node] = cycle
+                return
+            if node in visited:
+                return
+
+            visited.add(node)
+            recursion_stack.add(node)
+            path.append(node)
+
+            for neighbor in graph.get(node, []):
+                _dfs(neighbor, path)
+
+            path.pop()
+            recursion_stack.discard(node)
+
+        for step in plan.steps:
+            if step.step_id not in visited:
+                _dfs(step.step_id, [])
+
+        for _, cycle in cycle_path.items():
+            errors.append(ValidationError(
+                code="CIRCULAR_DEPENDENCY",
+                message=(
+                    f"Circular dependency detected: "
+                    f"{' -> '.join(cycle)}"
+                ),
+                severity=ValidationSeverity.ERROR,
+                related_step_ids=cycle,
+                details={"cycle": cycle},
+            ))
+
+        # Remove duplicate circular dependency errors (same cycle)
+        unique_cycle_errors: List[ValidationError] = []
+        seen_cycles: Set[str] = set()
+        for err in errors:
+            if err.code == "CIRCULAR_DEPENDENCY":
+                cycle_str = "->".join(sorted(err.related_step_ids or []))
+                if cycle_str in seen_cycles:
+                    continue
+                seen_cycles.add(cycle_str)
+            unique_cycle_errors.append(err)
+
+        is_valid = len(unique_cycle_errors) == 0
+
+        return PlanValidationResult(
+            is_valid=is_valid,
+            errors=unique_cycle_errors,
         )
