@@ -43,8 +43,14 @@ class DeploymentControlPanel(QWidget):
         self._mode = "safe"
         self._unattended = False
         self._emergency_stopped = False
+        self._initialized = False
+        self._stale_warning_count = 0
+        self._status_timer = QTimer()
+        self._status_timer.setObjectName("deployment_control_status")
+        self._status_timer.timeout.connect(self._safe_refresh)
 
         self._setup_ui()
+        self._initialized = True
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -384,6 +390,38 @@ class DeploymentControlPanel(QWidget):
             autonomous_deployer.cancel()
         except Exception as e:
             self._add_log(f"Emergency stop deployer call failed: {e}")
+
+    def _safe_refresh(self) -> None:
+        """Crash-safe refresh with stale-warning suppression."""
+        if not self._initialized:
+            return
+        try:
+            self._sync_ui_state()
+            self._stale_warning_count = 0
+        except RuntimeError as e:
+            self._stale_warning_count += 1
+            if self._stale_warning_count <= 3:
+                logger.warning(f"DeploymentControl stale refresh #{self._stale_warning_count}: {e}")
+            if self._stale_warning_count > 10:
+                try:
+                    self._status_timer.stop()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"DeploymentControl refresh suppressed: {e}")
+
+    def _sync_ui_state(self) -> None:
+        """Synchronize local display with centralized UI state."""
+        try:
+            if hasattr(self, '_auto_status_label') and self._auto_status_label:
+                self._auto_status_label.setText(f"Status: {ui_state.deployment_status}")
+            if hasattr(self, '_auto_phase_label') and self._auto_phase_label:
+                self._auto_phase_label.setText(f"Phase: {ui_state.phase.value}")
+            if hasattr(self, '_status_label') and self._status_label:
+                if ui_state.deployment_status != "Ready":
+                    self._status_label.setText(ui_state.deployment_status)
+        except Exception as e:
+            logger.warning(f"DeploymentControl sync suppressed: {e}")
 
     def _add_log(self, text: str) -> None:
         """Add log entry - guarded against missing widget."""

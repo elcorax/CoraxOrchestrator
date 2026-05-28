@@ -37,9 +37,13 @@ class DeploymentProgressPanel(QWidget):
         self._deploying = False
         self._start_time: Optional[float] = None
         self._refresh_timer = QTimer()
-        self._refresh_timer.timeout.connect(self._update_display)
+        self._refresh_timer.setObjectName("deployment_progress_refresh")
+        self._refresh_timer.timeout.connect(self._safe_refresh)
+        self._initialized = False
+        self._stale_warning_count = 0
 
         self._setup_ui()
+        self._initialized = True
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -264,6 +268,25 @@ class DeploymentProgressPanel(QWidget):
                     self._cmd_display.clear()
         except Exception as e:
             logger.warning(f"DeploymentProgress display update suppressed: {e}")
+
+    def _safe_refresh(self) -> None:
+        """Crash-safe refresh with stale-warning suppression."""
+        if not self._initialized:
+            return
+        try:
+            self._update_display()
+            self._stale_warning_count = 0
+        except RuntimeError as e:
+            self._stale_warning_count += 1
+            if self._stale_warning_count <= 3:
+                logger.warning(f"DeploymentProgress stale refresh #{self._stale_warning_count}: {e}")
+            if self._stale_warning_count > 10:
+                try:
+                    self._refresh_timer.stop()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"DeploymentProgress refresh suppressed: {e}")
 
     def _add_log(self, text: str) -> None:
         """Add log entry."""
