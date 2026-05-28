@@ -386,8 +386,13 @@ class DeploymentControlPanel(QWidget):
             self._add_log(f"Emergency stop deployer call failed: {e}")
 
     def _add_log(self, text: str) -> None:
-        """Add log entry."""
-        self._log_display.append(f"[{datetime.now().strftime('%H:%M:%S')}] {text}")
+        """Add log entry - guarded against missing widget."""
+        if not hasattr(self, '_log_display') or self._log_display is None:
+            return
+        try:
+            self._log_display.append(f"[{datetime.now().strftime('%H:%M:%S')}] {text}")
+        except Exception:
+            pass
 
     def get_mode(self) -> str:
         """Get current operation mode."""

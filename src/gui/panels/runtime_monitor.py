@@ -262,9 +262,11 @@ class RuntimeMonitorPanel(QWidget):
                 if hasattr(self, '_op_id_label') and self._op_id_label:
                     self._op_id_label.setText("Operation: --")
                 if hasattr(self, '_elapsed_label') and self._elapsed_label:
-                    self._elapsed_label.setText(f"Elapsed: {ui_state.deployment_elapsed:.0f}s")
+                    elapsed = getattr(ui_state, 'deployment_elapsed', 0)
+                    self._elapsed_label.setText(f"Elapsed: {elapsed:.0f}s")
                 if hasattr(self, '_remaining_label') and self._remaining_label:
-                    remaining = ui_state.estimated_remaining
+                    remaining = getattr(ui_state, 'estimated_remaining', 0)
+
                     if remaining > 0:
                         self._remaining_label.setText(f"Remaining: {remaining:.0f}s")
                     else:
@@ -275,6 +277,9 @@ class RuntimeMonitorPanel(QWidget):
             logger.warning(f"RuntimeMonitor refresh suppressed: {e}")
 
     def _clear_terminal(self) -> None:
-        """Clear the terminal output."""
+        """Clear the terminal output - guarded."""
+        if not hasattr(self, '_terminal_lines') or self._terminal_lines is None:
+            return
         self._terminal_lines.clear()
-        self._terminal_output.clear()
+        if hasattr(self, '_terminal_output') and self._terminal_output is not None:
+            self._terminal_output.clear()

@@ -238,7 +238,9 @@ class DashboardPanel(QWidget):
         self._scan_info.setText("\n".join(lines))
 
     def _add_activity(self, text: str) -> None:
-        """Add an activity entry."""
+        """Add an activity entry - guarded against missing widget."""
+        if not hasattr(self, '_activity_list') or self._activity_list is None:
+            return
         item = QListWidgetItem(f"[{datetime.now().strftime('%H:%M:%S')}] {text}")
         self._activity_list.insertItem(0, item)
         while self._activity_list.count() > 50:
@@ -281,8 +283,10 @@ class DashboardPanel(QWidget):
                 try:
                     label.setText(str(status))
                     label.setObjectName(style)
-                    label.style().unpolish(label)
-                    label.style().polish(label)
+                    style_obj = label.style()
+                    if style_obj is not None:
+                        style_obj.unpolish(label)
+                        style_obj.polish(label)
                 except Exception as inner_e:
                     logger.warning(f"Dashboard card style update suppressed: {inner_e}")
 
