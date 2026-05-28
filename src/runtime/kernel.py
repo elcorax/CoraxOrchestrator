@@ -647,7 +647,8 @@ class CoraxRuntimeKernel:
             # CRITICAL: Wire the orchestrator to the autonomous deployer
             # so install_tool() and pull_model() actually execute real installers
             autonomous_deployer.set_orchestrator(self._deployment_engine)
-            logger.info("Deployment orchestrator wired to autonomous deployer")
+            import logging as _logging
+            _logging.getLogger(__name__).info("Deployment orchestrator wired to autonomous deployer")
 
             self._state_machine.end_phase(
                 RuntimePhase.INIT_DEPLOYMENT,
