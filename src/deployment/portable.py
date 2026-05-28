@@ -21,7 +21,10 @@ import os
 import sys
 import shutil
 import subprocess
-import platform
+# CRITICAL: Import stdlib platform module BEFORE any src.platform imports.
+# Must use explicit import to prevent PyInstaller shadowing by src.platform package.
+import platform as _stdlib_platform
+platform = _stdlib_platform  # Keep API compatibility
 
 from src.core.logging import get_logger
 
