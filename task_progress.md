@@ -1,6 +1,7 @@
 # Corax Orchestrator - Internal Alpha Task Progress
 
 ## Task 1: Fix Critical Runtime Issues
+
 - [ ] Fix dashboard stale widget references
 - [ ] Fix platform module shadowing
 - [ ] Fix portable-mode runtime initialization edge cases
@@ -10,6 +11,7 @@
 - [ ] Verify executable startup stable
 
 ## Task 2: Clean Machine Validation
+
 - [ ] Create/validate environment validator
 - [ ] Create/validate dependency checker
 - [ ] Create/validate PATH repair validation
@@ -19,6 +21,7 @@
 - [ ] Test scenarios (no Python, Git, Node, Docker, Ollama, limited permissions, offline)
 
 ## Task 3: Executable Survivability
+
 - [ ] Validate repeated executable launches
 - [ ] Validate startup/shutdown cycles
 - [ ] Validate temp extraction cleanup
@@ -28,6 +31,7 @@
 - [ ] Validate interrupted deployment recovery
 
 ## Task 4: GUI-Runtime Full Convergence
+
 - [ ] Ensure deployment progress shows real data
 - [ ] Ensure retries display real data
 - [ ] Ensure repair activity shows real data
@@ -37,6 +41,7 @@
 - [ ] Ensure estimated remaining time shows real data
 
 ## Task 5: Deployment Safety
+
 - [ ] Ensure restore point ALWAYS created before deployment
 - [ ] Ensure rollback metadata recorded
 - [ ] Ensure deployment cancellation safe
@@ -44,9 +49,18 @@
 - [ ] Ensure recovery loops bounded
 
 ## Task 6: Internal Alpha Polish
+
 - [ ] Validate CORAX branding
 - [ ] Validate About dialog metadata
 - [ ] Validate logo rendering
 - [ ] Validate dark theme consistency
 - [ ] Validate scaling behavior
 - [ ] Validate portable mode UX
+
+---
+
+## Progress Log (2026-06-01)
+
+- Ran targeted unit tests for system_scanner and environment_analyzer. Installed test deps in environment: pytest, pytest-asyncio, pytest-mock, structlog, psutil. All targeted tests passed (system_scanner: 6 passed; environment_analyzer: 6 passed). No code changes were required. README shows dict-style ScanResult usage — documentation inconsistency only.
+
+Next: identify and fix the next confirmed runtime issue from the blocker list.
